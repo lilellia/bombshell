@@ -62,7 +62,7 @@ print(stdout)  # "hello\nworld"
 There must be a better way.
 
 ```py
-res = bombshell.Process("echo", "hello\nworld\ngoodbye").pipe_into("grep", "l")
+res = bombshell.Process("echo", "hello\nworld\ngoodbye").pipe_into("grep", "l").exec()
 print(res.stdout)  # "hello\nworld"
 
 # Process supports .__or__, so we can also do
