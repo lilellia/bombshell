@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build_meta"
+
+[project]
+name = "bombshell"
+version = "0.1.0"
+description = "A library for easily running shell commands, whether standalone or piped."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "typing-extensions>=4.0; python_version < '3.11'"
+]
+authors = [
+    { name = "Lily Ellington", email = "lilell_@outlook.com" }
+]
+keywords = [
+    "shell",
+    "command",
+    "command-line",
+    "bash",
+    "zsh",
+    "subprocess",
+    "pipe"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities"
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["I001"]
+
+[tool.ruff.isort]
+known-local-folder = ["bombshell"]
+force-single-line = false
+lines-after-imports = 1
+force-sort-within-sections = true
+order-by-type = false
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pytest>=9.0.2",
+]
+
+[project.urls]
+repository = "https://github.com/lilellia/bombshell"
+"Bug Tracker" = "https://github.com/lilellia/bombshell/issues"
+
+[tool.hatch.build]
+include = [
+    "bombshell"
+]
