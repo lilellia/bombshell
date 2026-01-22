@@ -45,13 +45,12 @@ line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F"]
+select = ["E", "F", "I"]
 ignore = ["I001"]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-local-folder = ["bombshell"]
 force-single-line = false
-lines-after-imports = 1
 force-sort-within-sections = true
 order-by-type = false
 
@@ -62,7 +61,9 @@ strict = true
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",
+    "pre-commit>=4.5.1",
     "pytest>=9.0.2",
+    "tox>=4.34.1",
 ]
 
 [project.urls]
