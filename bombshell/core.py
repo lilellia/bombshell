@@ -4,10 +4,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 import itertools
 import os
+from os import PathLike
 import shlex
 import subprocess
 import sys
 from threading import Thread
+import time
 from typing import Any, cast, Generic, IO, overload, TypeVar
 
 if sys.version_info >= (3, 11):
@@ -18,6 +20,9 @@ else:
 from .stream import consume_stream, feed_stream
 
 S = TypeVar("S", str, bytes)
+
+
+TIMEOUT_EXIT_CODE = 124
 
 
 class PipelineError(Exception, Generic[S]):
@@ -39,6 +44,10 @@ class CompletedProcess(Generic[S]):
     def exit_code(self) -> int:
         return self.exit_codes[-1]
 
+    def timed_out(self) -> bool:
+        """Return True if any of the processes in the pipeline timed out."""
+        return any(ec == TIMEOUT_EXIT_CODE for ec in self.exit_codes)
+
     def check(self, *, strict: bool = False) -> None:
         """Raise a PipelineError if the pipeline exited with a non-zero exit code.
 
@@ -55,94 +64,26 @@ class CompletedProcess(Generic[S]):
         if not strict and self.exit_code != 0:
             raise PipelineError(self)
 
+    def exit(self) -> None:
+        """Raise SystemExit with the same exit code as the last process in the pipeline."""
+        sys.exit(self.exit_code)
+
 
 class Process:
-    def __init__(self, *args: Any, env: Mapping[str, str] | None = None):
+    def __init__(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None):
         self.args = tuple(str(arg) for arg in args)
         self.env = {**os.environ, **(env or {})}
+        self.cwd = cwd
 
     def with_env(self, **kwargs: str) -> Self:
-        return type(self)(*self.args, env={**self.env, **kwargs})
+        return type(self)(*self.args, env={**self.env, **kwargs}, cwd=self.cwd)
 
-    def then(self, *args: Any) -> CommandChain:
-        match args:
-            case ():
-                raise ValueError(".then requires at least one argument")
-            case [obj] if isinstance(obj, (type(self), Pipeline, CommandChain)):
-                # Process("echo", 1).then(Process("echo", 2))
-                return CommandChain(self, obj)
-            case _:
-                # Process("echo", 1).then("echo", 2)
-                return CommandChain(self, Process(*args))
+    def with_cwd(self, cwd: str | PathLike[str] | None) -> Self:
+        return type(self)(*self.args, env=self.env, cwd=cwd)
 
-    @overload
-    def exec(
-        self,
-        stdin: str | None = None,
-        *,
-        capture: bool = True,
-        mode: type[str] = str,
-        merge_stderr: bool = False,
-    ) -> CompletedProcess[str]: ...
-
-    @overload
-    def exec(
-        self,
-        stdin: bytes | None = None,
-        *,
-        capture: bool = True,
-        mode: type[bytes],
-        merge_stderr: bool = False,
-    ) -> CompletedProcess[bytes]: ...
-
-    def exec(
-        self,
-        stdin: S | None = None,
-        *,
-        capture: bool = True,
-        mode: type[S] = str,  # type: ignore
-        merge_stderr: bool = False,
-    ) -> CompletedProcess[S]:
-        return Pipeline(self)(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr)
-
-    @overload
-    def __call__(
-        self,
-        stdin: str | None = None,
-        *,
-        capture: bool = True,
-        mode: type[str] = str,
-        merge_stderr: bool = False,
-    ) -> CompletedProcess[str]: ...
-
-    @overload
-    def __call__(
-        self,
-        stdin: bytes | None = None,
-        *,
-        capture: bool = True,
-        mode: type[bytes],
-        merge_stderr: bool = False,
-    ) -> CompletedProcess[bytes]: ...
-
-    def __call__(
-        self,
-        stdin: S | None = None,
-        *,
-        capture: bool = True,
-        mode: type[S] = str,  # type: ignore
-        merge_stderr: bool = False,
-    ) -> CompletedProcess[S]:
-        return self.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr)
-
-    def __or__(self, other: Self) -> Pipeline:
-        """Create a pipeline between this process and other. Example: Process("ls", "-1") | Process("tail", 5)"""
-        if isinstance(other, type(self)):
-            return Pipeline(self, other)
-
-        return NotImplemented
-
-    def pipe_into(self, *args: str, env: Mapping[str, str] | None = None) -> Pipeline:
+    def pipe_into(
+        self, *args: str, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
+    ) -> Pipeline:
         """Create a pipeline between this process and a command. Example: Process("ls", "-1").pipe_into("tail", 5)"""
         match args:
             case ():
@@ -152,12 +93,95 @@ class Process:
                 return Pipeline(self, obj)
             case _:
                 # Process("echo", 1).pipe_into("echo", 2)
-                return Pipeline(self, Process(*args))
-
-        if args:
-            return Pipeline(self, Process(*args, env=env))
+                return Pipeline(self, Process(*args, env=env, cwd=cwd))
 
         raise NotImplementedError
+
+    def and_then(
+        self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
+    ) -> CommandChain:
+        match args:
+            case ():
+                raise ValueError(".then requires at least one argument")
+            case [obj] if isinstance(obj, (type(self), Pipeline, CommandChain)):
+                # Process("echo", 1).then(Process("echo", 2))
+                return CommandChain(self, obj)
+            case _:
+                # Process("echo", 1).then("echo", 2)
+                return CommandChain(self, Process(*args, env=env, cwd=cwd))
+
+    @overload
+    def exec(
+        self,
+        stdin: str | None = None,
+        *,
+        capture: bool = True,
+        mode: type[str] = str,
+        merge_stderr: bool = False,
+        timeout: float | None = None,
+    ) -> CompletedProcess[str]: ...
+
+    @overload
+    def exec(
+        self,
+        stdin: bytes | None = None,
+        *,
+        capture: bool = True,
+        mode: type[bytes],
+        merge_stderr: bool = False,
+        timeout: float | None = None,
+    ) -> CompletedProcess[bytes]: ...
+
+    def exec(
+        self,
+        stdin: S | None = None,
+        *,
+        capture: bool = True,
+        mode: type[S] = str,  # type: ignore
+        merge_stderr: bool = False,
+        timeout: float | None = None,
+    ) -> CompletedProcess[S]:
+        return Pipeline(self).exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
+
+    @overload
+    def __call__(
+        self,
+        stdin: str | None = None,
+        *,
+        capture: bool = True,
+        mode: type[str] = str,
+        merge_stderr: bool = False,
+        timeout: float | None = None,
+    ) -> CompletedProcess[str]: ...
+
+    @overload
+    def __call__(
+        self,
+        stdin: bytes | None = None,
+        *,
+        capture: bool = True,
+        mode: type[bytes],
+        merge_stderr: bool = False,
+        timeout: float | None = None,
+    ) -> CompletedProcess[bytes]: ...
+
+    def __call__(
+        self,
+        stdin: S | None = None,
+        *,
+        capture: bool = True,
+        mode: type[S] = str,  # type: ignore
+        merge_stderr: bool = False,
+        timeout: float | None = None,
+    ) -> CompletedProcess[S]:
+        return self.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
+
+    def __or__(self, other: Self) -> Pipeline:
+        """Create a pipeline between this process and other. Example: Process("ls", "-1") | Process("tail", 5)"""
+        if isinstance(other, type(self)):
+            return Pipeline(self, other)
+
+        return NotImplemented
 
     def __str__(self) -> str:
         return shlex.join(self.args)
@@ -171,7 +195,19 @@ class Pipeline:
     def __init__(self, *processes: Process) -> None:
         self.processes = processes
 
-    def pipe_into(self, *args: Any, env: Mapping[str, str] | None = None) -> Self:
+    def with_env(self, **kwargs: str) -> Self:
+        """Return a new Pipeline that has the given environment variables applied to all of its processes."""
+        processes = [proc.with_env(**kwargs) for proc in self.processes]
+        return type(self)(*processes)
+
+    def with_cwd(self, cwd: str | PathLike[str] | None) -> Self:
+        """Return a new Pipeline that has the given working directory applied to all of its processes."""
+        processes = [proc.with_cwd(cwd) for proc in self.processes]
+        return type(self)(*processes)
+
+    def pipe_into(
+        self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
+    ) -> Self:
         match args:
             case ():
                 raise ValueError(".pipe_into requires at least one argument")
@@ -181,12 +217,9 @@ class Pipeline:
                 return type(self)(*self.processes, *obj.processes)
             case _:
                 # Process("echo", 1).pipe_into("echo", 2)
-                return type(self)(*self.processes, Process(*args))
+                return type(self)(*self.processes, Process(*args, env=env, cwd=cwd))
 
-    def __or__(self, other: Process) -> Self:
-        return self.pipe_into(other)
-
-    def then(self, *args: Any) -> CommandChain:
+    def and_then(self, *args: Any) -> CommandChain:
         match args:
             case ():
                 raise ValueError(".then requires at least one argument")
@@ -196,6 +229,9 @@ class Pipeline:
             case _:
                 # Process("echo", 1).then("echo", 2)
                 return CommandChain(self, Process(*args))
+
+    def __or__(self, other: Process) -> Self:
+        return self.pipe_into(other)
 
     @overload
     def _setup_chain(
@@ -240,7 +276,13 @@ class Pipeline:
                 proc_stderr = None
 
             p = subprocess.Popen(
-                proc.args, stdin=proc_stdin, stdout=proc_stdout, stderr=proc_stderr, text=is_text, env=proc.env
+                proc.args,
+                stdin=proc_stdin,
+                stdout=proc_stdout,
+                stderr=proc_stderr,
+                text=is_text,
+                env=proc.env,
+                cwd=proc.cwd,
             )
             procs.append(p)
 
@@ -258,6 +300,7 @@ class Pipeline:
         capture: bool = True,
         mode: type[str] = str,
         merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[str]: ...
 
     @overload
@@ -268,6 +311,7 @@ class Pipeline:
         capture: bool = True,
         mode: type[bytes],
         merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[bytes]: ...
 
     def exec(
@@ -277,6 +321,7 @@ class Pipeline:
         capture: bool = True,
         mode: type[S] = str,  # type: ignore
         merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[S]:
         procs = self._setup_chain(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr)
 
@@ -304,13 +349,24 @@ class Pipeline:
             threads.append(t)
 
         # --- wait for all processes to finish --- #
-        for t in threads:
-            t.join()
-
+        start_time = time.monotonic()
         exit_codes: list[int] = []
         for p in procs:
-            p.wait()
-            exit_codes.append(p.returncode)
+            if timeout is None:
+                remaining = None
+            else:
+                remaining = max(0, timeout - (time.monotonic() - start_time))
+
+            try:
+                p.wait(timeout=remaining)
+                exit_codes.append(p.returncode)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.wait()
+                exit_codes.append(TIMEOUT_EXIT_CODE)
+
+        for t in threads:
+            t.join()
 
         # --- build completed process object --- #
         stdout = mode().join(stdout_block) if capture else mode()
@@ -327,6 +383,7 @@ class Pipeline:
         capture: bool = True,
         mode: type[str] = str,
         merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[str]: ...
 
     @overload
@@ -337,6 +394,7 @@ class Pipeline:
         capture: bool = True,
         mode: type[bytes],
         merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[bytes]: ...
 
     def __call__(
@@ -346,8 +404,9 @@ class Pipeline:
         capture: bool = True,
         mode: type[S] = str,  # type: ignore
         merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[S]:
-        return self.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr)
+        return self.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
 
     def __str__(self) -> str:
         return " | ".join(str(process) for process in self.processes)
@@ -368,7 +427,19 @@ class CommandChain:
                 item = cast(Process | Pipeline, item)
                 self.items.append(item)
 
-    def then(self, *args: Any) -> Self:
+    def with_env(self, **kwargs: str) -> Self:
+        """Return a new CommandChain that has the given environment variables applied to all of its processes."""
+        items = [item.with_env(**kwargs) for item in self.items]
+        return type(self)(*items)
+
+    def with_cwd(self, cwd: str | PathLike[str] | None) -> Self:
+        """Return a new CommandChain that has the given working directory applied to all of its processes."""
+        items = [item.with_cwd(cwd) for item in self.items]
+        return type(self)(*items)
+
+    def and_then(
+        self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
+    ) -> Self:
         match args:
             case ():
                 raise ValueError(".then requires at least one argument")
@@ -377,16 +448,28 @@ class CommandChain:
                 return type(self)(self, obj)
             case _:
                 # Process("echo", 1).then("echo", 2)
-                return type(self)(self, Process(*args))
+                return type(self)(self, Process(*args, env=env, cwd=cwd))
 
     @overload
     def exec(
-        self, stdin: str | None = None, *, capture: bool = True, mode: type[str] = str, merge_stderr: bool = False
+        self,
+        stdin: str | None = None,
+        *,
+        capture: bool = True,
+        mode: type[str] = str,
+        merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[str]: ...
 
     @overload
     def exec(
-        self, stdin: bytes | None = None, *, capture: bool = True, mode: type[bytes], merge_stderr: bool = False
+        self,
+        stdin: bytes | None = None,
+        *,
+        capture: bool = True,
+        mode: type[bytes],
+        merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[bytes]: ...
 
     def exec(
@@ -396,6 +479,7 @@ class CommandChain:
         capture: bool = True,
         mode: type[S] = str,  # type: ignore
         merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[S]:
         all_args: list[tuple[tuple[str, ...], ...]] = []
         all_exit_codes: list[int] = []
@@ -403,9 +487,16 @@ class CommandChain:
         stdout_parts: list[S] = []
         stderr_parts: list[S] = []
 
+        start_time = time.monotonic()
         for idx, item in enumerate(self.items):
             proc_stdin = stdin if idx == 0 else None
-            res = item.exec(stdin=proc_stdin, capture=capture, mode=mode, merge_stderr=merge_stderr)
+
+            if timeout is None:
+                remaining = None
+            else:
+                remaining = max(0, timeout - (time.monotonic() - start_time))
+
+            res = item.exec(stdin=proc_stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=remaining)
 
             all_args.append(res.args)
             all_exit_codes.extend(res.exit_codes)
@@ -425,12 +516,24 @@ class CommandChain:
 
     @overload
     def __call__(
-        self, stdin: str | None = None, *, capture: bool = True, mode: type[str] = str, merge_stderr: bool = False
+        self,
+        stdin: str | None = None,
+        *,
+        capture: bool = True,
+        mode: type[str] = str,
+        merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[str]: ...
 
     @overload
     def __call__(
-        self, stdin: bytes | None = None, *, capture: bool = True, mode: type[bytes], merge_stderr: bool = False
+        self,
+        stdin: bytes | None = None,
+        *,
+        capture: bool = True,
+        mode: type[bytes],
+        merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[bytes]: ...
 
     def __call__(
@@ -440,8 +543,9 @@ class CommandChain:
         capture: bool = True,
         mode: type[S] = str,  # type: ignore
         merge_stderr: bool = False,
+        timeout: float | None = None,
     ) -> CompletedProcess[S]:
-        return self.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr)
+        return self.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
 
     def __str__(self) -> str:
         return " && ".join(str(item) for item in self.items)
