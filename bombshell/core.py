@@ -17,12 +17,11 @@ if sys.version_info >= (3, 11):
 else:
     from typing_extensions import Self
 
+from .resources import ResourceData
 from .stream import consume_stream, feed_stream
+from .wait import TIMEOUT_EXIT_CODE, wait
 
 S = TypeVar("S", str, bytes)
-
-
-TIMEOUT_EXIT_CODE = 124
 
 
 class PipelineError(Exception, Generic[S]):
@@ -39,10 +38,35 @@ class CompletedProcess(Generic[S]):
     exit_codes: list[int]
     stdout: S
     stderr: S
+    runtime: float
+    resources: tuple[ResourceData, ...]
 
     @property
     def exit_code(self) -> int:
         return self.exit_codes[-1]
+
+    @property
+    def total_resources(self) -> ResourceData:
+        """Return the total resource usage for all processes in the pipeline.
+        On non-Unix systems, only `real_time` can be non-None.
+        """
+        rtime = self.runtime
+
+        all_user_times = [r.user_time for r in self.resources]
+        utime = None if None in all_user_times else sum(cast(list[float], all_user_times))
+
+        all_system_times = [r.system_time for r in self.resources]
+        stime = None if None in all_system_times else sum(cast(list[float], all_system_times))
+
+        all_maxrss = [r.max_resident_set_size for r in self.resources]
+        maxrss = None if None in all_maxrss else max(cast(list[int], all_maxrss))
+
+        return ResourceData(
+            real_time=rtime,
+            user_time=utime,
+            system_time=stime,
+            max_resident_set_size=maxrss,
+        )
 
     def timed_out(self) -> bool:
         """Return True if any of the processes in the pipeline timed out."""
@@ -236,17 +260,17 @@ class Pipeline:
     @overload
     def _setup_chain(
         self, stdin: str | None, capture: bool, mode: type[str], merge_stderr: bool
-    ) -> list[subprocess.Popen[str]]: ...
+    ) -> list[tuple[subprocess.Popen[str], float]]: ...
 
     @overload
     def _setup_chain(
         self, stdin: bytes | None, capture: bool, mode: type[bytes], merge_stderr: bool
-    ) -> list[subprocess.Popen[bytes]]: ...
+    ) -> list[tuple[subprocess.Popen[str], float]]: ...
 
     def _setup_chain(
         self, stdin: S | None, capture: bool, mode: type[S], merge_stderr: bool
-    ) -> list[subprocess.Popen[S]]:
-        procs: list[subprocess.Popen[S]] = []
+    ) -> list[tuple[subprocess.Popen[str], float]]:
+        procs: list[tuple[subprocess.Popen[str], float]] = []
         is_text = mode is str
 
         for i, proc in enumerate(self.processes):
@@ -255,7 +279,7 @@ class Pipeline:
             if i == 0 and stdin is not None:
                 proc_stdin = subprocess.PIPE
             elif i > 0:
-                proc_stdin = procs[i - 1].stdout
+                proc_stdin = procs[i - 1][0].stdout
             else:
                 proc_stdin = None
 
@@ -284,10 +308,10 @@ class Pipeline:
                 env=proc.env,
                 cwd=proc.cwd,
             )
-            procs.append(p)
+            procs.append((p, time.perf_counter()))
 
             # close the stdout of the previous process in order to allow it to receive SIGPIPE
-            if i > 0 and (prev_stdout := procs[i - 1].stdout):
+            if i > 0 and (prev_stdout := procs[i - 1][0].stdout):
                 prev_stdout.close()
 
         return procs
@@ -323,47 +347,45 @@ class Pipeline:
         merge_stderr: bool = False,
         timeout: float | None = None,
     ) -> CompletedProcess[S]:
+        exec_start = time.perf_counter()
         procs = self._setup_chain(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr)
+        resource_data: list[ResourceData] = []
 
         # --- set up stdout/stderr handlers --- #
         stdout_block: list[S] = []
         stderr_blocks: list[list[S]] = [[] for _ in procs]
         threads: list[Thread] = []
 
-        for idx, proc in enumerate(procs):
+        for idx, (proc, start) in enumerate(procs):
             if proc.stderr:
                 t = Thread(target=consume_stream, args=(proc.stderr, stderr_blocks[idx]))
                 t.start()
                 threads.append(t)
 
-        if procs[-1].stdout:
-            t = Thread(target=consume_stream, args=(procs[-1].stdout, stdout_block))
+        if procs[-1][0].stdout:
+            t = Thread(target=consume_stream, args=(procs[-1][0].stdout, stdout_block))
             t.start()
             threads.append(t)
 
         # --- handle stdin to first process --- #
         if stdin is not None:
-            assert procs[0].stdin is not None
-            t = Thread(target=feed_stream, args=(procs[0].stdin, stdin))
+            assert procs[0][0].stdin is not None
+            t = Thread(target=feed_stream, args=(procs[0][0].stdin, stdin))
             t.start()
             threads.append(t)
 
         # --- wait for all processes to finish --- #
-        start_time = time.monotonic()
+        start_time = time.perf_counter()
         exit_codes: list[int] = []
-        for p in procs:
+        for p, p_start in procs:
             if timeout is None:
                 remaining = None
             else:
-                remaining = max(0, timeout - (time.monotonic() - start_time))
+                remaining = max(0, timeout - (time.perf_counter() - start_time))
 
-            try:
-                p.wait(timeout=remaining)
-                exit_codes.append(p.returncode)
-            except subprocess.TimeoutExpired:
-                p.kill()
-                p.wait()
-                exit_codes.append(TIMEOUT_EXIT_CODE)
+            exit_code, resource = wait(p, timeout=remaining)
+            exit_codes.append(exit_code)
+            resource_data.append(resource)
 
         for t in threads:
             t.join()
@@ -373,7 +395,15 @@ class Pipeline:
         stderr = mode().join(mode().join(block) for block in stderr_blocks) if capture and not merge_stderr else mode()
         args = tuple(proc.args for proc in self.processes)
 
-        return CompletedProcess(args=args, command=str(self), exit_codes=exit_codes, stdout=stdout, stderr=stderr)
+        return CompletedProcess(
+            args=args,
+            command=str(self),
+            exit_codes=exit_codes,
+            stdout=stdout,
+            stderr=stderr,
+            resources=tuple(resource_data),
+            runtime=time.perf_counter() - exec_start,
+        )
 
     @overload
     def __call__(
@@ -481,25 +511,28 @@ class CommandChain:
         merge_stderr: bool = False,
         timeout: float | None = None,
     ) -> CompletedProcess[S]:
+        exec_start = time.perf_counter()
         all_args: list[tuple[tuple[str, ...], ...]] = []
         all_exit_codes: list[int] = []
+        resource_data: list[ResourceData] = []
 
         stdout_parts: list[S] = []
         stderr_parts: list[S] = []
 
-        start_time = time.monotonic()
+        start_time = time.perf_counter()
         for idx, item in enumerate(self.items):
             proc_stdin = stdin if idx == 0 else None
 
             if timeout is None:
                 remaining = None
             else:
-                remaining = max(0, timeout - (time.monotonic() - start_time))
+                remaining = max(0, timeout - (time.perf_counter() - start_time))
 
             res = item.exec(stdin=proc_stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=remaining)
 
             all_args.append(res.args)
             all_exit_codes.extend(res.exit_codes)
+            resource_data.extend(res.resources)
             stdout_parts.append(res.stdout)
             stderr_parts.append(res.stderr)
 
@@ -512,6 +545,8 @@ class CommandChain:
             exit_codes=all_exit_codes,
             stdout=mode().join(stdout_parts),
             stderr=mode().join(stderr_parts),
+            resources=tuple(resource_data),
+            runtime=time.perf_counter() - exec_start,
         )
 
     @overload
