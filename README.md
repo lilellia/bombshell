@@ -110,12 +110,14 @@ for proc in procs:
 whereas we can do
 
 ```py
-res = Process("echo", 1).and_then("echo", 2).and_then("false").and_then("echo", "3")
+res = Process("echo", 1).and_then("echo", 2).and_then("false").and_then("echo", "3").exec()
 print(res.command)     # echo 1 && echo 2 && false && echo 3
 print(res.stdout)      # "1\n2\n"
 print(res.exit_code)   # 1
 print(res.exit_codes)  # [0, 0, 1]  <-- indicating that the first two echo commands exited with 0, then false exited with 1
 ```
+
+For convenience, a top-level `exec` function is also provided as a wrapper around `Process(...).exec(...)`. In general, `Process(...).exec(...)` should be preferred for clarity. The top-level `exec` function does not support pipes and still requires the arguments to be provided as variadic arguments, rather than as a string.
 
 ## Installation
 
@@ -250,7 +252,7 @@ res.check()             # raises PipelineError
 - `exit() -> None`: raises SystemExit, exiting the Python process with the same exit code as the process in question.
 
 ```bash
-$ python3 -c "from bombshell import Process; Process('exit', 17).exec().exit()" ; echo $?
+$ python3 -c "from bombshell import exec; exec('exit', 17).exit()" ; echo $?
 17
 ```
 
@@ -264,11 +266,35 @@ Note that, unlike `subprocess`, `bombshell` does not use exception flow for time
 $ timeout 1 sleep 3 ; echo $?
 124
 
-$ python -c "from bombshell import Process; Process('sleep', 3).exec(timeout=1).exit()" ; echo $?
+$ python -c "from bombshell import exec; exec('sleep', 3, timeout=1).exit()" ; echo $?
 124
+
+$ python -c "from bombshell import exec; print(exec('sleep', 3, timeout=1).timed_out())"
+True
 ```
 
-To determine if a timeout has occurred, use `if p.exec().timed_out():`. Note that `p.exec().check()` will raise an exception in the event of a timeout as well.
+To determine if a timeout has occurred, use `if p.exec().timed_out():`. Note that `p.exec().check()` can raise an exception in the event of a timeout as well since the offending process's exit code is set to a nonzero value. Further note that the process's actual timeout state is observed as a result of the internal execution method: thus,
+
+```py
+>>> res = Process("exit", 124).exec()
+>>> res.exit_code
+124
+>>> res.timed_out()
+False
+```
+
+### `exec`
+
+A top-level function that wraps `Process(...).exec(...)`. The signature is `def exec(*args: str, **kwargs) -> CompletedProcess[S]`. The available kwargs are all of the keyword arguments to `Process.__init__` (`cwd` and `env`) and `.exec` (`stdin`, `capture`, `mode`, `merge_stderr`, `timeout`).
+
+`*args` must still be given as variadic arguments: `exec` does not support single-string commands (à la `shell=True`). Thus, the following are equivalent:
+
+```py
+>>> Process("printenv", "FOO", env={"FOO": "7"}).exec(capture=False)
+>>> exec("printenv", "FOO", env={"FOO": "7"}, capture=False)
+```
+
+In general, the top one (`Process(...).exec(...)`) should be preferred for clarity but the latter may sometimes be preferable in "shell script" types of programs.
 
 ### `Process`
 
@@ -282,7 +308,7 @@ A `Process` object takes a command to run as arguments, along with (optionally) 
 
 - `with_cwd(self, cwd: PathLike[str] | None)`: return a new Process object with the updated working directory.
 
-- `pipe_into(self, *args: Any, env: Mapping[str, str] | None = None) -> Pipeline`: return a new Pipeline object that represents `command1 | command2`. The given `args` can eithe ra series of values to use as a command (such as `Process("echo", 1).pipe_into("echo", 2)`, equivalent to `echo 1 | echo 2`), or it can be a single `Process` object (such as `Process("echo", 1).pipe_into(Process("echo", 2))`.)
+- `pipe_into(self, *args: Any, env: Mapping[str, str] | None = None) -> Pipeline`: return a new Pipeline object that represents `command1 | command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).pipe_into("echo", 2)`, equivalent to `echo 1 | echo 2`), or it can be a single `Process` object (such as `Process("echo", 1).pipe_into(Process("echo", 2))`.)
 
 - `and_then(self, *args: Any) -> CommandChain`: return a CommandChain object that represents `command1 && command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).and_then("echo", 2)`, equivalent to `echo 1 && echo 2`), or it can be a single Process/Pipeline/CommandChain object (such as `Process("echo", 1).and_then(Process("echo", 2))`.)
 

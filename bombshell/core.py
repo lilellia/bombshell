@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import itertools
 import os
 from os import PathLike
@@ -10,7 +10,7 @@ import subprocess
 import sys
 from threading import Thread
 import time
-from typing import Any, cast, Generic, IO, overload, TypeVar
+from typing import Any, cast, Generic, IO, NamedTuple, overload, TypeVar
 
 if sys.version_info >= (3, 11):
     from typing import Self
@@ -19,7 +19,7 @@ else:
 
 from .resources import ResourceData
 from .stream import consume_stream, feed_stream
-from .wait import TIMEOUT_EXIT_CODE, wait
+from .wait import wait
 
 S = TypeVar("S", str, bytes)
 
@@ -40,6 +40,7 @@ class CompletedProcess(Generic[S]):
     stderr: S
     runtime: float
     resources: tuple[ResourceData, ...]
+    _timed_out: bool = field(init=True, repr=False)
 
     @property
     def exit_code(self) -> int:
@@ -70,7 +71,7 @@ class CompletedProcess(Generic[S]):
 
     def timed_out(self) -> bool:
         """Return True if any of the processes in the pipeline timed out."""
-        return any(ec == TIMEOUT_EXIT_CODE for ec in self.exit_codes)
+        return self._timed_out
 
     def check(self, *, strict: bool = False) -> None:
         """Raise a PipelineError if the pipeline exited with a non-zero exit code.
@@ -91,6 +92,43 @@ class CompletedProcess(Generic[S]):
     def exit(self) -> None:
         """Raise SystemExit with the same exit code as the last process in the pipeline."""
         sys.exit(self.exit_code)
+
+
+@overload
+def exec(
+    *args: str,
+    env: Mapping[str, str] | None = None,
+    cwd: str | PathLike[str] | None = None,
+    capture: bool = True,
+    mode: type[bytes] = bytes,
+    merge_stderr: bool = True,
+    timeout: float | None = None,
+) -> CompletedProcess[bytes]: ...
+
+
+@overload
+def exec(
+    *args: str,
+    env: Mapping[str, str] | None = None,
+    cwd: str | PathLike[str] | None = None,
+    capture: bool = True,
+    mode: type[str] = str,
+    merge_stderr: bool = True,
+    timeout: float | None = None,
+) -> CompletedProcess[str]: ...
+
+
+def exec(
+    *args: str,
+    env: Mapping[str, str] | None = None,
+    cwd: str | PathLike[str] | None = None,
+    capture: bool = True,
+    mode: type[S] = str,  # type: ignore
+    merge_stderr: bool = False,
+    timeout: float | None = None,
+) -> CompletedProcess[S]:
+    """Execute the given command and return the result as a CompletedProcess object."""
+    return Process(*args, env=env, cwd=cwd).exec(capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
 
 
 class Process:
@@ -215,6 +253,11 @@ class Process:
         return f"{self.__class__.__name__}({args})"
 
 
+class _ActiveProcess(NamedTuple, Generic[S]):
+    process: subprocess.Popen[S]
+    start_time: float
+
+
 class Pipeline:
     def __init__(self, *processes: Process) -> None:
         self.processes = processes
@@ -260,17 +303,17 @@ class Pipeline:
     @overload
     def _setup_chain(
         self, stdin: str | None, capture: bool, mode: type[str], merge_stderr: bool
-    ) -> list[tuple[subprocess.Popen[str], float]]: ...
+    ) -> list[_ActiveProcess[str]]: ...
 
     @overload
     def _setup_chain(
         self, stdin: bytes | None, capture: bool, mode: type[bytes], merge_stderr: bool
-    ) -> list[tuple[subprocess.Popen[str], float]]: ...
+    ) -> list[_ActiveProcess[bytes]]: ...
 
     def _setup_chain(
         self, stdin: S | None, capture: bool, mode: type[S], merge_stderr: bool
-    ) -> list[tuple[subprocess.Popen[str], float]]:
-        procs: list[tuple[subprocess.Popen[str], float]] = []
+    ) -> list[_ActiveProcess[S]]:
+        procs: list[_ActiveProcess[S]] = []
         is_text = mode is str
 
         for i, proc in enumerate(self.processes):
@@ -308,7 +351,7 @@ class Pipeline:
                 env=proc.env,
                 cwd=proc.cwd,
             )
-            procs.append((p, time.perf_counter()))
+            procs.append(_ActiveProcess(process=p, start_time=time.perf_counter()))
 
             # close the stdout of the previous process in order to allow it to receive SIGPIPE
             if i > 0 and (prev_stdout := procs[i - 1][0].stdout):
@@ -362,30 +405,32 @@ class Pipeline:
                 t.start()
                 threads.append(t)
 
-        if procs[-1][0].stdout:
-            t = Thread(target=consume_stream, args=(procs[-1][0].stdout, stdout_block))
+        if stream := procs[-1].process.stdout:
+            t = Thread(target=consume_stream, args=(stream, stdout_block))
             t.start()
             threads.append(t)
 
         # --- handle stdin to first process --- #
         if stdin is not None:
-            assert procs[0][0].stdin is not None
-            t = Thread(target=feed_stream, args=(procs[0][0].stdin, stdin))
+            assert (stream := procs[0].process.stdin) is not None
+            t = Thread(target=feed_stream, args=(stream, stdin))
             t.start()
             threads.append(t)
 
         # --- wait for all processes to finish --- #
         start_time = time.perf_counter()
         exit_codes: list[int] = []
+        timed_out = False
         for p, p_start in procs:
             if timeout is None:
                 remaining = None
             else:
                 remaining = max(0, timeout - (time.perf_counter() - start_time))
 
-            exit_code, resource = wait(p, timeout=remaining)
+            exit_code, resource, p_timed_out = wait(p, timeout=remaining)
             exit_codes.append(exit_code)
             resource_data.append(resource)
+            timed_out = timed_out or p_timed_out
 
         for t in threads:
             t.join()
@@ -403,6 +448,7 @@ class Pipeline:
             stderr=stderr,
             resources=tuple(resource_data),
             runtime=time.perf_counter() - exec_start,
+            _timed_out=timed_out,
         )
 
     @overload
@@ -515,6 +561,7 @@ class CommandChain:
         all_args: list[tuple[tuple[str, ...], ...]] = []
         all_exit_codes: list[int] = []
         resource_data: list[ResourceData] = []
+        timed_out = False
 
         stdout_parts: list[S] = []
         stderr_parts: list[S] = []
@@ -535,6 +582,7 @@ class CommandChain:
             resource_data.extend(res.resources)
             stdout_parts.append(res.stdout)
             stderr_parts.append(res.stderr)
+            timed_out = timed_out or res._timed_out
 
             if res.exit_code != 0:
                 break
@@ -547,6 +595,7 @@ class CommandChain:
             stderr=mode().join(stderr_parts),
             resources=tuple(resource_data),
             runtime=time.perf_counter() - exec_start,
+            _timed_out=timed_out,
         )
 
     @overload

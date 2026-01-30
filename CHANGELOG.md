@@ -1,5 +1,8 @@
 # Changelog
 
+- Adds top-level `bombshell.exec` function that is a wrapper around `Process(...).exec(...)`.
+- Changes internal detection for `CompletedProcess.timed_out`. Now uses an explicit flag rather than relying on the exit code being 124.
+
 ## v0.3.0
 
 - Adds resource usage data (real time, user time, system time, max rss) to `CompletedProcess`. This is accessible per process via the `.resources` attribute, as well as a total resource usage via `.total_resources`. The real time is also available as a top-level attribute (`.runtime`).
