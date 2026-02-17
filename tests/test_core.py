@@ -82,7 +82,7 @@ def test_basic_pipeline() -> None:
     pipeline = proc | Script.grep("1")
     res = pipeline.exec()
     assert res.stdout == "hello1\n"
-    assert res.exit_codes == [0, 0]
+    assert res.exit_codes == (0, 0)
     assert res.exit_code == 0
 
 
@@ -97,7 +97,7 @@ def test_basic_pipeline_failure() -> None:
     pipeline = Script.echo("hello1\nhello2") | Script.grep("3")
     res = pipeline.exec()
     assert res.stdout == ""
-    assert res.exit_codes == [0, 1]
+    assert res.exit_codes == (0, 1)
     assert res.exit_code == 1
 
 
@@ -116,7 +116,7 @@ def test_masked_pipeline_failure() -> None:
     pipeline = Script.false() | Script.true()
     res = pipeline.exec()
     assert res.stdout == ""
-    assert res.exit_codes == [1, 0]
+    assert res.exit_codes == (1, 0)
     assert res.exit_code == 0
 
 
@@ -228,7 +228,7 @@ def test_failed_chain_stops() -> None:
     res = chain.exec()
     assert res.stdout == "1\n"
     assert res.exit_code == 1
-    assert res.exit_codes == [0, 1]
+    assert res.exit_codes == (0, 1)
 
 
 def test_multiple_environment_settings() -> None:
@@ -253,5 +253,5 @@ def test_sigpipe_exit_code() -> None:
     p3 = Script.cat()
 
     res = (p1 | p2 | p3).exec()
-    assert res.exit_codes == [-13, 0, 0]  # -13/141 is SIGPIPE
+    assert res.exit_codes == (-13, 0, 0)  # -13/141 is SIGPIPE
     assert res.stdout == "b" * 1024 * 1024

@@ -114,7 +114,7 @@ res = Process("echo", 1).and_then("echo", 2).and_then("false").and_then("echo", 
 print(res.command)     # echo 1 && echo 2 && false && echo 3
 print(res.stdout)      # "1\n2\n"
 print(res.exit_code)   # 1
-print(res.exit_codes)  # [0, 0, 1]  <-- indicating that the first two echo commands exited with 0, then false exited with 1
+print(res.exit_codes)  # (0, 0, 1)  <-- indicating that the first two echo commands exited with 0, then false exited with 1
 ```
 
 For convenience, a top-level `exec` function is also provided as a wrapper around `Process(...).exec(...)`. In general, `Process(...).exec(...)` should be preferred for clarity. The top-level `exec` function does not support pipes and still requires the arguments to be provided as variadic arguments, rather than as a string.
@@ -145,7 +145,7 @@ try:
 except PipelineError as err:
     # err.process == Process("false").exec()
     print(err.process.command)     # "false"
-    print(err.process.exit_codes)  # [1]
+    print(err.process.exit_codes)  # (1,)
 ```
 
 ### `ResourceData`
@@ -184,7 +184,7 @@ An object that stores the state of a completed process. In particular, its attri
 |---------------|-------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `args`        | `tuple[tuple[str, ...], ...]` | the arguments that were passed to the process(es) that gave this result                                                                                                   |
 | `command`     | `str`                         | a string representation of the command as would be run on the command line (formatted for POSIX)                                                                          |
-| `exit_codes`  | `list[int]`                   | all of the exit codes for the various processes in the pipeline                                                                                                           |
+| `exit_codes`  | `tuple[int, ...]`             | all of the exit codes for the various processes in the pipeline                                                                                                           |
 | `exit_code`   | `int`                         | the exit code of the last executed part of the pipeline (and thus the exit code of the pipeline)                                                                          |
 | `stdout`      | `S` (str or bytes)            | the contents of the stdout pipes, if captured. `p1.pipe_into(p2).exec().stdout` will contain only the output of `p2`; `p1.and_then(p2).exec().stdout` will contain both. |
 | `stderr`      | `S` (str or bytes)            | the contents of the stderr pipes, if captured. This will always include the combination of all stderr pipes.                                                              |
@@ -203,7 +203,7 @@ res = (
 
 print(res.args)          # (("echo", "1"), ("echo", "2"), ("false",), ("echo", "3"))
 print(res.command)       # "echo 1 | echo 2 | false | echo 3"
-print(res.exit_codes)    # [0, 0, 1, 0]
+print(res.exit_codes)    # (0, 0, 1, 0)
 print(res.exit_code)     # 0
 print(res.stdout)        # "3\n"
 print(res.stderr)        # ""

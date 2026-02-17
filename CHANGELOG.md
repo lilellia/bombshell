@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.5.1
+
+- Changes `CompletedProcess.exit_codes` to `tuple` instead of `list`.
+- Fixes bug in `CompletedProcess.__add__` as to how resource data is combined.
+
+## v0.5.0
+
+- Refactors `Process`, `Pipeline`, `CommandChain` into one polymorphic class, simplifying the API slightly.
+- Provides `__add__` for `CompletedProcess` and `ResourceData`.
+
+## v0.4.0
+
 - Adds top-level `bombshell.exec` function that is a wrapper around `Process(...).exec(...)`.
 - Changes internal detection for `CompletedProcess.timed_out`. Now uses an explicit flag rather than relying on the exit code being 124.
 

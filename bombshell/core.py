@@ -297,7 +297,7 @@ class Process:
         return CompletedProcess(
             args=self.args,
             command=str(self),
-            exit_codes=exit_codes,
+            exit_codes=tuple(exit_codes),
             stdout=stdout_content,
             stderr=stderr_content,
             resources=tuple(resource_data),

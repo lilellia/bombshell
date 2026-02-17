@@ -17,7 +17,7 @@ else:
 class CompletedProcess(Generic[S]):
     args: tuple[tuple[str, ...], ...]
     command: str
-    exit_codes: list[int]
+    exit_codes: tuple[int, ...]
     stdout: S
     stderr: S
     runtime: float
@@ -31,7 +31,7 @@ class CompletedProcess(Generic[S]):
         return type(self)(
             args=self.args + other.args,
             command=f"{self.command} && {other.command}",
-            exit_codes=self.exit_codes + other.exit_codes,
+            exit_codes=(*self.exit_codes, *other.exit_codes),
             stdout=self.stdout + other.stdout,
             stderr=self.stderr + other.stderr,
             runtime=self.runtime + other.runtime,
