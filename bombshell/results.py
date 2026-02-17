@@ -35,7 +35,7 @@ class CompletedProcess(Generic[S]):
             stdout=self.stdout + other.stdout,
             stderr=self.stderr + other.stderr,
             runtime=self.runtime + other.runtime,
-            resources=self.resources + other.resources,
+            resources=(*self.resources, *other.resources),
             _timed_out=self._timed_out or other._timed_out,
         )
 
