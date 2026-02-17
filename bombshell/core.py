@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-import itertools
+from collections.abc import Mapping, Sequence
+from enum import Enum
 import os
 from os import PathLike
 import shlex
@@ -9,19 +9,31 @@ import subprocess
 import sys
 from threading import Thread
 import time
-from typing import Any, cast, Generic, IO, NamedTuple, overload, TypeVar
+from typing import Any, NamedTuple, overload, TypeVar
 
 if sys.version_info >= (3, 11):
     from typing import Self
 else:
     from typing_extensions import Self
 
+
 from .resources import ResourceData
 from .results import CompletedProcess
-from .stream import consume_stream, feed_stream
+from .stream import consume_stream, feed_stream, make_buffer
 from .wait import wait
 
 S = TypeVar("S", str, bytes)
+
+
+class CommandRelation(Enum):
+    NONE = ""
+    PIPE = "|"
+    CHAIN = "&&"
+
+
+class _ActiveProcess(NamedTuple):
+    process: subprocess.Popen[Any]
+    start_time: float
 
 
 @overload
@@ -62,232 +74,86 @@ def exec(
 
 
 class Process:
-    def __init__(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None):
-        self.args = tuple(str(arg) for arg in args)
+    def __init__(
+        self,
+        *args: Any,
+        env: Mapping[str, str] | None = None,
+        cwd: str | PathLike[str] | None = None,
+        _relation: CommandRelation = CommandRelation.NONE,
+        _children: tuple[Process, Process] | None = None,
+    ):
+        self._args = tuple(str(arg) for arg in args)
         self.env = {**os.environ, **(env or {})}
         self.cwd = cwd
 
-    def with_env(self, **kwargs: str) -> Self:
-        return type(self)(*self.args, env={**self.env, **kwargs}, cwd=self.cwd)
+        self._relation = _relation
+        self._children = _children
 
-    def with_cwd(self, cwd: str | PathLike[str] | None) -> Self:
-        return type(self)(*self.args, env=self.env, cwd=cwd)
+    @property
+    def args(self) -> tuple[tuple[str, ...], ...]:
+        if self._children:
+            left, right = self._children
 
-    def pipe_into(
-        self, *args: str, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
-    ) -> Pipeline:
-        """Create a pipeline between this process and a command. Example: Process("ls", "-1").pipe_into("tail", 5)"""
+            return left.args + right.args
+
+        return (self._args,)
+
+    def _bridge(
+        self,
+        *args: Any,
+        env: Mapping[str, str] | None = None,
+        cwd: str | PathLike[str] | None = None,
+        relation: CommandRelation = CommandRelation.NONE,
+    ) -> Self:
         match args:
-            case ():
-                raise ValueError(".pipe_into requires at least one argument")
-            case [obj] if isinstance(obj, type(self)):
-                # Process("echo", 1).pipe_into(Process("echo", 2))
-                return Pipeline(self, obj)
+            case []:
+                raise ValueError("function requires at least one argument")
+            case [obj] if isinstance(obj, (Process, type(self))):
+                # Command("echo", 1).pipe_into(Command("echo", 2))
+                other = obj
             case _:
-                # Process("echo", 1).pipe_into("echo", 2)
-                return Pipeline(self, Process(*args, env=env, cwd=cwd))
+                # Command("echo", 1).pipe_into("echo", 2)
+                other = type(self)(*args, env=env, cwd=cwd)
 
-        raise NotImplementedError
-
-    def and_then(
-        self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
-    ) -> CommandChain:
-        match args:
-            case ():
-                raise ValueError(".then requires at least one argument")
-            case [obj] if isinstance(obj, (type(self), Pipeline, CommandChain)):
-                # Process("echo", 1).then(Process("echo", 2))
-                return CommandChain(self, obj)
-            case _:
-                # Process("echo", 1).then("echo", 2)
-                return CommandChain(self, Process(*args, env=env, cwd=cwd))
-
-    @overload
-    def exec(
-        self,
-        stdin: str | None = None,
-        *,
-        capture: bool = True,
-        mode: type[str] = str,
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[str]: ...
-
-    @overload
-    def exec(
-        self,
-        stdin: bytes | None = None,
-        *,
-        capture: bool = True,
-        mode: type[bytes],
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[bytes]: ...
-
-    def exec(
-        self,
-        stdin: S | None = None,
-        *,
-        capture: bool = True,
-        mode: type[S] = str,  # type: ignore
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[S]:
-        return Pipeline(self).exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
-
-    @overload
-    def __call__(
-        self,
-        stdin: str | None = None,
-        *,
-        capture: bool = True,
-        mode: type[str] = str,
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[str]: ...
-
-    @overload
-    def __call__(
-        self,
-        stdin: bytes | None = None,
-        *,
-        capture: bool = True,
-        mode: type[bytes],
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[bytes]: ...
-
-    def __call__(
-        self,
-        stdin: S | None = None,
-        *,
-        capture: bool = True,
-        mode: type[S] = str,  # type: ignore
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[S]:
-        return self.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
-
-    def __or__(self, other: Self) -> Pipeline:
-        """Create a pipeline between this process and other. Example: Process("ls", "-1") | Process("tail", 5)"""
-        if isinstance(other, type(self)):
-            return Pipeline(self, other)
-
-        return NotImplemented
-
-    def __str__(self) -> str:
-        return shlex.join(self.args)
-
-    def __repr__(self) -> str:
-        args = ", ".join(repr(arg) for arg in self.args)
-        return f"{self.__class__.__name__}({args})"
-
-
-class _ActiveProcess(NamedTuple, Generic[S]):
-    process: subprocess.Popen[S]
-    start_time: float
-
-
-class Pipeline:
-    def __init__(self, *processes: Process) -> None:
-        self.processes = processes
-
-    def with_env(self, **kwargs: str) -> Self:
-        """Return a new Pipeline that has the given environment variables applied to all of its processes."""
-        processes = [proc.with_env(**kwargs) for proc in self.processes]
-        return type(self)(*processes)
-
-    def with_cwd(self, cwd: str | PathLike[str] | None) -> Self:
-        """Return a new Pipeline that has the given working directory applied to all of its processes."""
-        processes = [proc.with_cwd(cwd) for proc in self.processes]
-        return type(self)(*processes)
+        return type(self)(_relation=relation, _children=(self, other))
 
     def pipe_into(
         self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
     ) -> Self:
-        match args:
-            case ():
-                raise ValueError(".pipe_into requires at least one argument")
-            case [obj] if isinstance(obj, Process):
-                return type(self)(*self.processes, obj)
-            case [obj] if isinstance(obj, type(self)):
-                return type(self)(*self.processes, *obj.processes)
-            case _:
-                # Process("echo", 1).pipe_into("echo", 2)
-                return type(self)(*self.processes, Process(*args, env=env, cwd=cwd))
+        return self._bridge(*args, env=env, cwd=cwd, relation=CommandRelation.PIPE)
 
-    def and_then(self, *args: Any) -> CommandChain:
-        match args:
-            case ():
-                raise ValueError(".then requires at least one argument")
-            case [obj] if isinstance(obj, (Process, type(self), CommandChain)):
-                # Process("echo", 1).then(Process("echo", 2))
-                return CommandChain(self, obj)
-            case _:
-                # Process("echo", 1).then("echo", 2)
-                return CommandChain(self, Process(*args))
+    def __or__(self, other: Self) -> Self:
+        if not isinstance(other, type(self)):
+            return NotImplemented
 
-    def __or__(self, other: Process) -> Self:
         return self.pipe_into(other)
 
-    @overload
-    def _setup_chain(
-        self, stdin: str | None, capture: bool, mode: type[str], merge_stderr: bool
-    ) -> list[_ActiveProcess[str]]: ...
+    def and_then(
+        self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
+    ) -> Self:
+        return self._bridge(*args, env=env, cwd=cwd, relation=CommandRelation.CHAIN)
 
-    @overload
-    def _setup_chain(
-        self, stdin: bytes | None, capture: bool, mode: type[bytes], merge_stderr: bool
-    ) -> list[_ActiveProcess[bytes]]: ...
+    def with_cwd(self, cwd: str | PathLike[str] | None) -> Self:
+        if self._children:
+            left, right = self._children
 
-    def _setup_chain(
-        self, stdin: S | None, capture: bool, mode: type[S], merge_stderr: bool
-    ) -> list[_ActiveProcess[S]]:
-        procs: list[_ActiveProcess[S]] = []
-        is_text = mode is str
-
-        for i, proc in enumerate(self.processes):
-            # determine where to get input
-            proc_stdin: int | IO[Any] | None
-            if i == 0 and stdin is not None:
-                proc_stdin = subprocess.PIPE
-            elif i > 0:
-                proc_stdin = procs[i - 1][0].stdout
-            else:
-                proc_stdin = None
-
-            # determine where to send output
-            if capture or i < len(self.processes) - 1:
-                proc_stdout = subprocess.PIPE
-            else:
-                proc_stdout = None
-
-            # determine where to send stderr
-            if i < len(self.processes) - 1:
-                # intermediate process
-                proc_stderr = subprocess.PIPE if capture else None
-            elif capture:
-                # final process
-                proc_stderr = subprocess.STDOUT if merge_stderr else subprocess.PIPE
-            else:
-                proc_stderr = None
-
-            p = subprocess.Popen(
-                proc.args,
-                stdin=proc_stdin,
-                stdout=proc_stdout,
-                stderr=proc_stderr,
-                text=is_text,
-                env=proc.env,
-                cwd=proc.cwd,
+            return type(self)(
+                _relation=self._relation,
+                _children=(left.with_cwd(cwd), right.with_cwd(cwd)),
             )
-            procs.append(_ActiveProcess(process=p, start_time=time.perf_counter()))
 
-            # close the stdout of the previous process in order to allow it to receive SIGPIPE
-            if i > 0 and (prev_stdout := procs[i - 1][0].stdout):
-                prev_stdout.close()
+        return type(self)(*self._args, env=self.env, cwd=cwd)
 
-        return procs
+    def with_env(self, **kwargs: str) -> Self:
+        if self._children:
+            left, right = self._children
+
+            return type(self)(
+                _relation=self._relation,
+                _children=(left.with_env(**kwargs), right.with_env(**kwargs)),
+            )
+
+        return type(self)(*self._args, env={**self.env, **kwargs}, cwd=self.cwd)
 
     @overload
     def exec(
@@ -306,7 +172,7 @@ class Pipeline:
         stdin: bytes | None = None,
         *,
         capture: bool = True,
-        mode: type[bytes],
+        mode: type[bytes] = bytes,
         merge_stderr: bool = False,
         timeout: float | None = None,
     ) -> CompletedProcess[bytes]: ...
@@ -316,254 +182,165 @@ class Pipeline:
         stdin: S | None = None,
         *,
         capture: bool = True,
-        mode: type[S] = str,  # type: ignore
+        mode: type[S] = str,  # type: ignore[assignment]
         merge_stderr: bool = False,
         timeout: float | None = None,
     ) -> CompletedProcess[S]:
-        exec_start = time.perf_counter()
-        procs = self._setup_chain(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr)
-        resource_data: list[ResourceData] = []
+        match self._relation:
+            case CommandRelation.NONE | CommandRelation.PIPE:
+                procs = self._launch(
+                    stdin_fd=subprocess.PIPE if stdin is not None else None,
+                    stdout_fd=subprocess.PIPE if capture else None,
+                    stderr_fd=subprocess.STDOUT if merge_stderr else (subprocess.PIPE if capture else None),
+                    text=(mode is str),
+                )
 
-        # --- set up stdout/stderr handlers --- #
-        stdout_block: list[S] = []
-        stderr_blocks: list[list[S]] = [[] for _ in procs]
+                return self._exec_pipeline(procs, stdin=stdin, capture=capture, mode=mode, timeout=timeout)
+
+            case CommandRelation.CHAIN:
+                return self._exec_chain(stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
+
+            case _:
+                raise ValueError(f"invalid relation: {self._relation}")
+
+    def _launch(
+        self, stdin_fd: int | None, stdout_fd: int | None, stderr_fd: int | None, text: bool
+    ) -> list[_ActiveProcess]:
+        match self._relation:
+            case CommandRelation.NONE:
+                p = subprocess.Popen(
+                    self._args,
+                    stdin=stdin_fd,
+                    stdout=stdout_fd,
+                    stderr=stderr_fd,
+                    text=text,
+                    env=self.env,
+                    cwd=self.cwd,
+                )
+                return [_ActiveProcess(p, time.perf_counter())]
+
+            case CommandRelation.PIPE:
+                assert self._children is not None
+                left, right = self._children
+                r, w = os.pipe()
+
+                p1 = left._launch(stdin_fd, w, stderr_fd, text)
+                p2 = right._launch(r, stdout_fd, stderr_fd, text)
+
+                os.close(r)
+                os.close(w)
+
+                return p1 + p2
+
+            case CommandRelation.CHAIN:
+                raise NotImplementedError
+
+    def _exec_pipeline(
+        self,
+        procs: Sequence[_ActiveProcess],
+        stdin: S | None,
+        *,
+        capture: bool,
+        mode: type[S],
+        timeout: float | None,
+    ) -> CompletedProcess[S]:
+        start_time = min(p.start_time for p in procs)
+
+        stdout = make_buffer(mode)
+        stderrs = [make_buffer(mode) for _ in procs]
+
         threads: list[Thread] = []
 
-        for idx, (proc, start) in enumerate(procs):
+        # --- set up stdin to first process --- #
+        if stdin:
+            assert (sink := procs[0].process.stdin) is not None
+            stdin_producer = Thread(target=feed_stream, kwargs=dict(sink=sink, content=stdin))
+            stdin_producer.start()
+            threads.append(stdin_producer)
+
+        # --- set up stderr consumers --- #
+        for (proc, _), buffer in zip(procs, stderrs):
             if proc.stderr:
-                t = Thread(target=consume_stream, args=(proc.stderr, stderr_blocks[idx]))
+                t = Thread(target=consume_stream, kwargs=dict(source=proc.stderr, sink=buffer))
                 t.start()
                 threads.append(t)
 
-        if stream := procs[-1].process.stdout:
-            t = Thread(target=consume_stream, args=(stream, stdout_block))
+        # --- set up stdout consumer --- #
+        if (stream := procs[-1].process.stdout) is not None:
+            t = Thread(target=consume_stream, kwargs=dict(source=stream, sink=stdout))
             t.start()
             threads.append(t)
 
-        # --- handle stdin to first process --- #
-        if stdin is not None:
-            assert (stream := procs[0].process.stdin) is not None
-            t = Thread(target=feed_stream, args=(stream, stdin))
-            t.start()
-            threads.append(t)
-
-        # --- wait for all processes to finish --- #
-        start_time = time.perf_counter()
+        # --- wait for all processes to exit --- #
+        resource_data: list[ResourceData] = []
         exit_codes: list[int] = []
         timed_out = False
-        for p, p_start in procs:
+
+        for proc, start in procs:
             if timeout is None:
                 remaining = None
             else:
                 remaining = max(0, timeout - (time.perf_counter() - start_time))
 
-            exit_code, resource, p_timed_out = wait(p, timeout=remaining)
+            exit_code, resources, p_timed_out = wait(proc, timeout=remaining)
             exit_codes.append(exit_code)
-            resource_data.append(resource)
-            timed_out = timed_out or p_timed_out
+            resource_data.append(resources)
+            timed_out |= p_timed_out
 
         for t in threads:
             t.join()
 
         # --- build completed process object --- #
-        stdout = mode().join(stdout_block) if capture else mode()
-        stderr = mode().join(mode().join(block) for block in stderr_blocks) if capture and not merge_stderr else mode()
-        args = tuple(proc.args for proc in self.processes)
+        stdout_content = stdout.getvalue()
+        stderr_content = mode().join(buffer.getvalue() for buffer in stderrs)
 
         return CompletedProcess(
-            args=args,
+            args=self.args,
             command=str(self),
             exit_codes=exit_codes,
-            stdout=stdout,
-            stderr=stderr,
+            stdout=stdout_content,
+            stderr=stderr_content,
             resources=tuple(resource_data),
-            runtime=time.perf_counter() - exec_start,
+            runtime=time.perf_counter() - start_time,
             _timed_out=timed_out,
         )
 
-    @overload
-    def __call__(
+    def _exec_chain(
         self,
-        stdin: str | None = None,
+        stdin: S | None,
         *,
-        capture: bool = True,
-        mode: type[str] = str,
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[str]: ...
-
-    @overload
-    def __call__(
-        self,
-        stdin: bytes | None = None,
-        *,
-        capture: bool = True,
-        mode: type[bytes],
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[bytes]: ...
-
-    def __call__(
-        self,
-        stdin: S | None = None,
-        *,
-        capture: bool = True,
-        mode: type[S] = str,  # type: ignore
-        merge_stderr: bool = False,
-        timeout: float | None = None,
+        capture: bool,
+        mode: type[S],
+        merge_stderr: bool,
+        timeout: float | None,
     ) -> CompletedProcess[S]:
-        return self.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
+        assert self._children is not None
+        left, right = self._children
+
+        res1 = left.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
+
+        if res1.exit_code:
+            return res1
+
+        if timeout is None:
+            remaining = None
+        else:
+            remaining = max(0, timeout - res1.runtime)
+
+        res2 = right.exec(stdin=None, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=remaining)
+        return res1 + res2
+
+    __call__ = exec
 
     def __str__(self) -> str:
-        return " | ".join(str(process) for process in self.processes)
+        match self._relation:
+            case CommandRelation.NONE:
+                return shlex.join(self._args)
 
-    def __repr__(self) -> str:
-        args = ", ".join(repr(process) for process in self.processes)
-        return f"{self.__class__.__name__}({args})"
+            case CommandRelation.PIPE | CommandRelation.CHAIN:
+                assert self._children is not None
+                left, right = self._children
+                return f"{left} {self._relation.value} {right}"
 
-
-class CommandChain:
-    def __init__(self, *items: Process | Pipeline | Self) -> None:
-        self.items: list[Process | Pipeline] = []
-
-        for item in items:
-            if isinstance(item, type(self)):
-                self.items.extend(item.items)
-            else:
-                item = cast(Process | Pipeline, item)
-                self.items.append(item)
-
-    def with_env(self, **kwargs: str) -> Self:
-        """Return a new CommandChain that has the given environment variables applied to all of its processes."""
-        items = [item.with_env(**kwargs) for item in self.items]
-        return type(self)(*items)
-
-    def with_cwd(self, cwd: str | PathLike[str] | None) -> Self:
-        """Return a new CommandChain that has the given working directory applied to all of its processes."""
-        items = [item.with_cwd(cwd) for item in self.items]
-        return type(self)(*items)
-
-    def and_then(
-        self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
-    ) -> Self:
-        match args:
-            case ():
-                raise ValueError(".then requires at least one argument")
-            case [obj] if isinstance(obj, (Process, Pipeline, type(self))):
-                # Process("echo", 1).then(Process("echo", 2))
-                return type(self)(self, obj)
             case _:
-                # Process("echo", 1).then("echo", 2)
-                return type(self)(self, Process(*args, env=env, cwd=cwd))
-
-    @overload
-    def exec(
-        self,
-        stdin: str | None = None,
-        *,
-        capture: bool = True,
-        mode: type[str] = str,
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[str]: ...
-
-    @overload
-    def exec(
-        self,
-        stdin: bytes | None = None,
-        *,
-        capture: bool = True,
-        mode: type[bytes],
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[bytes]: ...
-
-    def exec(
-        self,
-        stdin: S | None = None,
-        *,
-        capture: bool = True,
-        mode: type[S] = str,  # type: ignore
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[S]:
-        exec_start = time.perf_counter()
-        all_args: list[tuple[tuple[str, ...], ...]] = []
-        all_exit_codes: list[int] = []
-        resource_data: list[ResourceData] = []
-        timed_out = False
-
-        stdout_parts: list[S] = []
-        stderr_parts: list[S] = []
-
-        start_time = time.perf_counter()
-        for idx, item in enumerate(self.items):
-            proc_stdin = stdin if idx == 0 else None
-
-            if timeout is None:
-                remaining = None
-            else:
-                remaining = max(0, timeout - (time.perf_counter() - start_time))
-
-            res = item.exec(stdin=proc_stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=remaining)
-
-            all_args.append(res.args)
-            all_exit_codes.extend(res.exit_codes)
-            resource_data.extend(res.resources)
-            stdout_parts.append(res.stdout)
-            stderr_parts.append(res.stderr)
-            timed_out = timed_out or res._timed_out
-
-            if res.exit_code != 0:
-                break
-
-        return CompletedProcess(
-            args=tuple(itertools.chain.from_iterable(all_args)),
-            command=str(self),
-            exit_codes=all_exit_codes,
-            stdout=mode().join(stdout_parts),
-            stderr=mode().join(stderr_parts),
-            resources=tuple(resource_data),
-            runtime=time.perf_counter() - exec_start,
-            _timed_out=timed_out,
-        )
-
-    @overload
-    def __call__(
-        self,
-        stdin: str | None = None,
-        *,
-        capture: bool = True,
-        mode: type[str] = str,
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[str]: ...
-
-    @overload
-    def __call__(
-        self,
-        stdin: bytes | None = None,
-        *,
-        capture: bool = True,
-        mode: type[bytes],
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[bytes]: ...
-
-    def __call__(
-        self,
-        stdin: S | None = None,
-        *,
-        capture: bool = True,
-        mode: type[S] = str,  # type: ignore
-        merge_stderr: bool = False,
-        timeout: float | None = None,
-    ) -> CompletedProcess[S]:
-        return self.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
-
-    def __str__(self) -> str:
-        return " && ".join(str(item) for item in self.items)
-
-    def __repr__(self) -> str:
-        args = ", ".join(repr(item) for item in self.items)
-        return f"{self.__class__.__name__}({args})"
+                raise ValueError(f"invalid relation: {self._relation}")

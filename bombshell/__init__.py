@@ -1,5 +1,5 @@
-from .core import CommandChain, exec, Pipeline, Process
+from .core import exec, Process
 from .resources import ResourceData
 from .results import CompletedProcess, PipelineError
 
-__all__ = ["Process", "Pipeline", "CompletedProcess", "PipelineError", "CommandChain", "ResourceData", "exec"]
+__all__ = ["exec", "Process", "ResourceData", "CompletedProcess", "PipelineError"]

@@ -37,6 +37,34 @@ class ResourceData(NamedTuple):
     system_time: float | None = None
     max_resident_set_size: int | None = None
 
+    def combine(self, other: Self) -> Self:
+        if not isinstance(other, type(self)):
+            raise TypeError(f"Cannot combine {type(self)} with {other!r}")
+
+        rtime = self.real_time + other.real_time
+
+        if self.user_time is None or other.user_time is None:
+            utime = None
+        else:
+            utime = self.user_time + other.user_time
+
+        if self.system_time is None or other.system_time is None:
+            stime = None
+        else:
+            stime = self.system_time + other.system_time
+
+        if self.max_resident_set_size is None or other.max_resident_set_size is None:
+            maxrss = None
+        else:
+            maxrss = max(self.max_resident_set_size, other.max_resident_set_size)
+
+        return type(self)(
+            real_time=rtime,
+            user_time=utime,
+            system_time=stime,
+            max_resident_set_size=maxrss,
+        )
+
     @classmethod
     def from_rusage(cls, real_time: float, rusage: RUsage) -> Self:
         # MacOS reports rss in bytes; Linux reports it in KiB

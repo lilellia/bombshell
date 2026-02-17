@@ -14,7 +14,7 @@ class Script:
 
     @staticmethod
     def echo_command(text: str) -> str:
-        return shlex.join(Script.echo(text).args)
+        return shlex.join(Script.echo(text)._args)
 
     @staticmethod
     def false(error: int = 1) -> Process:
@@ -125,7 +125,7 @@ def test_pipeline_string_representation() -> None:
     true = Script.true()
 
     res = (false | true).exec()
-    assert res.command == f"{shlex.join(false.args)} | {shlex.join(true.args)}"
+    assert res.command == f"{shlex.join(false._args)} | {shlex.join(true._args)}"
 
 
 def test_masked_pipeline_failure_passes_check_nonstrict() -> None:
@@ -189,13 +189,13 @@ def test_5mb_stdin_without_deadlock() -> None:
 
 
 def test_5mb_stdin_piped_without_deadlock() -> None:
-    res = Script.cat().pipe_into(*Script.grep("hello").args).exec("hello\n" * 2**20)
+    res = Script.cat().pipe_into(Script.grep("hello")).exec("hello\n" * 2**20)
     assert res.stdout == "hello\n" * 2**20
     assert res.exit_code == 0
 
 
 def test_bytes_mode() -> None:
-    res = Script.echo("hello").pipe_into(*Script.cat().args).exec(mode=bytes)
+    res = Script.echo("hello").pipe_into(Script.cat()).exec(mode=bytes)
     assert res.stdout in (b"hello\n", b"hello\r\n")
     assert res.exit_code == 0
 
@@ -208,10 +208,10 @@ def test_environment_setting() -> None:
 
 def test_command_chain() -> None:
     echo_1 = Script.echo("1")
-    echo_2 = Script.echo("2").args
-    echo_3 = Script.echo("3").args
+    echo_2 = Script.echo("2")
+    echo_3 = Script.echo("3")
 
-    chain = echo_1.and_then(*echo_2).and_then(*echo_3)
+    chain = echo_1.and_then(echo_2).and_then(echo_3)
     assert str(chain) == f"{Script.echo_command('1')} && {Script.echo_command('2')} && {Script.echo_command('3')}"
 
     res = chain.exec()
@@ -221,10 +221,10 @@ def test_command_chain() -> None:
 
 def test_failed_chain_stops() -> None:
     p1 = Script.echo("1")
-    p2 = Script.false().args
-    p3 = Script.echo("3").args
+    p2 = Script.false()
+    p3 = Script.echo("3")
 
-    chain = p1.and_then(*p2).and_then(*p3)
+    chain = p1.and_then(p2).and_then(p3)
     res = chain.exec()
     assert res.stdout == "1\n"
     assert res.exit_code == 1

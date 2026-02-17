@@ -1,18 +1,31 @@
-from typing import IO, TypeVar
+from io import BytesIO, StringIO
+from typing import IO, overload, TypeVar
 
 S = TypeVar("S", str, bytes)
 
 
-def consume_stream(stream: IO[S], buffer: list[S]) -> None:
+def consume_stream(source: IO[S], sink: IO[S]) -> None:
     try:
-        while block := stream.read():
-            buffer.append(block)
+        while block := source.read():
+            sink.write(block)
     finally:
-        stream.close()
+        source.close()
 
 
-def feed_stream(stream: IO[S], content: S) -> None:
+def feed_stream(sink: IO[S], content: S) -> None:
     try:
-        stream.write(content)
+        sink.write(content)
     finally:
-        stream.close()
+        sink.close()
+
+
+@overload
+def make_buffer(mode: type[str]) -> StringIO: ...
+
+
+@overload
+def make_buffer(mode: type[bytes]) -> BytesIO: ...
+
+
+def make_buffer(mode: type[S]) -> BytesIO | StringIO:
+    return BytesIO() if mode is bytes else StringIO()

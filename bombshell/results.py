@@ -7,6 +7,12 @@ from .resources import ResourceData
 S = TypeVar("S", str, bytes)
 
 
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
+
+
 @dataclass(frozen=True, slots=True)
 class CompletedProcess(Generic[S]):
     args: tuple[tuple[str, ...], ...]
@@ -17,6 +23,21 @@ class CompletedProcess(Generic[S]):
     runtime: float
     resources: tuple[ResourceData, ...]
     _timed_out: bool = field(init=True, repr=False)
+
+    def __add__(self, other: Self) -> Self:
+        if not isinstance(other, type(self)):
+            return NotImplemented
+
+        return type(self)(
+            args=self.args + other.args,
+            command=f"{self.command} && {other.command}",
+            exit_codes=self.exit_codes + other.exit_codes,
+            stdout=self.stdout + other.stdout,
+            stderr=self.stderr + other.stderr,
+            runtime=self.runtime + other.runtime,
+            resources=self.resources + other.resources,
+            _timed_out=self._timed_out or other._timed_out,
+        )
 
     @property
     def exit_code(self) -> int:

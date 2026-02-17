@@ -306,26 +306,10 @@ A `Process` object takes a command to run as arguments, along with (optionally) 
 
 - `with_env(self, **kwargs) -> Self`: return a new Process object with the updated environment variables. Note that this updates the current environment, rather than replacing it. In particular, `Process(..., env=env1).with_env(**env2)` will have its environment be equivalent to `{**os.environ, **env1, **env2}`.
 
-- `with_cwd(self, cwd: PathLike[str] | None)`: return a new Process object with the updated working directory.
+- `with_cwd(self, cwd: str | PathLike[str] | None) -> Self`: return a new Process object with the updated working directory.
 
-- `pipe_into(self, *args: Any, env: Mapping[str, str] | None = None) -> Pipeline`: return a new Pipeline object that represents `command1 | command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).pipe_into("echo", 2)`, equivalent to `echo 1 | echo 2`), or it can be a single `Process` object (such as `Process("echo", 1).pipe_into(Process("echo", 2))`.)
+- `pipe_into(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None) -> Self`: return a new Process object that represents `command1 | command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).pipe_into("echo", 2)`, equivalent to `echo 1 | echo 2`), or it can be a single `Process` object (such as `Process("echo", 1).pipe_into(Process("echo", 2))`.) The parameters `env` and `cwd` are ignored when `args` is a single `Process` object.
 
-- `and_then(self, *args: Any) -> CommandChain`: return a CommandChain object that represents `command1 && command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).and_then("echo", 2)`, equivalent to `echo 1 && echo 2`), or it can be a single Process/Pipeline/CommandChain object (such as `Process("echo", 1).and_then(Process("echo", 2))`.)
+- `and_then(self, *args: Any) -> Self`: return a Process object that represents `command1 && command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).and_then("echo", 2)`, equivalent to `echo 1 && echo 2`), or it can be a single Process/Pipeline/CommandChain object (such as `Process("echo", 1).and_then(Process("echo", 2))`.) The parameters `env` and `cwd` are ignored when `args` is a single `Process` object.
 
-- `__or__(self, other: Self) -> Pipeline`: an alias for `.pipe_into`, but requires that the other object is a `Process` object.
-
-### `Pipeline`
-
-A `Pipeline` is an object that represents a piped series of commands. It provides the same methods to provide parity with `Process`, though `Pipeline.pipe_into` and `Pipeline.__or__` both support `Pipeline` as an object.
-
-Note that `Pipeline.with_env` and `.with_cwd` will affect the environment variable dict and working directory of all processes in the pipeline.
-
-In practice, it is unlikely that you would create Pipeline objects directly, but rather as `Process(...).pipe_into(...)`.
-
-### `CommandChain`
-
-Like `Pipeline`, this is an object that represents a chained series of commands. It also provides the same methods to provide parity with `Process`.
-
-Note that `CommandChain.with_env` and `.with_cwd` will affect the environment variable dict and working directory of all processes in the chain.
-
-It is unlikely that you would create CommandChain objects directly, but rather as `Process(...).and_then(...)`.
+- `__or__(self, other: Self) -> Self`: an alias for `.pipe_into`, but requires that the other object is a `Process` object.

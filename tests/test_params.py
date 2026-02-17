@@ -30,14 +30,16 @@ def test_process_cwd() -> None:
 
 def test_pipeline_env() -> None:
     pipeline = (Script.printenv("FOO") | Script.printenv("BAR")).with_env(FOO="bar", BAR="baz")
-    assert pipeline.processes[0].exec().stdout == "bar\n"
-    assert pipeline.processes[1].exec().stdout == "baz\n"
+    assert pipeline._children is not None
+    assert pipeline._children[0].exec().stdout == "bar\n"
+    assert pipeline._children[1].exec().stdout == "baz\n"
 
 
 def test_pipeline_cwd() -> None:
     pipeline = (Script.pwd() | Script.pwd()).with_cwd(".")
-    assert pipeline.processes[0].exec().stdout == f"{Path.cwd()}\n"
-    assert pipeline.processes[1].exec().stdout == f"{Path.cwd()}\n"
+    assert pipeline._children is not None
+    assert pipeline._children[0].exec().stdout == f"{Path.cwd()}\n"
+    assert pipeline._children[1].exec().stdout == f"{Path.cwd()}\n"
 
 
 def test_command_chain_env() -> None:
