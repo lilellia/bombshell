@@ -30,6 +30,7 @@ S = TypeVar("S", str, bytes)
 class CommandRelation(Enum):
     NONE = ""
     PIPE = "|"
+    THEN = ";"
     CHAIN = "&&"
 
 
@@ -135,6 +136,9 @@ class Process:
 
         return self.pipe_into(other)
 
+    def then(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None) -> Self:
+        return self._bridge(*args, env=env, cwd=cwd, relation=CommandRelation.THEN)
+
     def and_then(
         self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
     ) -> Self:
@@ -212,7 +216,8 @@ class Process:
                         spin_state.exit_code = res.exit_code
                     return res
 
-            case CommandRelation.CHAIN:
+            case CommandRelation.THEN | CommandRelation.CHAIN:
+                check = self._relation == CommandRelation.CHAIN
                 return self._exec_chain(
                     stdin,
                     capture=capture,
@@ -220,6 +225,7 @@ class Process:
                     merge_stderr=merge_stderr,
                     timeout=timeout,
                     with_spinner=with_spinner,
+                    check=check,
                 )
 
             case _:
@@ -254,7 +260,7 @@ class Process:
 
                 return p1 + p2
 
-            case CommandRelation.CHAIN:
+            case CommandRelation.THEN | CommandRelation.CHAIN:
                 raise NotImplementedError
 
     def _exec_pipeline(
@@ -336,6 +342,7 @@ class Process:
         merge_stderr: bool,
         timeout: float | None,
         with_spinner: bool,
+        check: bool,
     ) -> CompletedProcess[S]:
         assert self._children is not None
         left, right = self._children
@@ -346,7 +353,7 @@ class Process:
             if spin_state:
                 spin_state.exit_code = res1.exit_code
 
-        if res1.exit_code:
+        if check and res1.exit_code:
             return res1
 
         if timeout is None:
@@ -369,7 +376,7 @@ class Process:
             case CommandRelation.NONE:
                 return shlex.join(self._args)
 
-            case CommandRelation.PIPE | CommandRelation.CHAIN:
+            case CommandRelation.PIPE | CommandRelation.CHAIN | CommandRelation.THEN:
                 assert self._children is not None
                 left, right = self._children
                 return f"{left} {self._relation.value} {right}"
