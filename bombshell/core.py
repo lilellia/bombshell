@@ -340,7 +340,7 @@ class Process:
         assert self._children is not None
         left, right = self._children
 
-        with spin(message=str(self)) if with_spinner else nullcontext() as spin_state:
+        with spin(message=str(left)) if with_spinner else nullcontext() as spin_state:
             res1 = left.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
 
             if spin_state:

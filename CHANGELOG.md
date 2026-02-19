@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.1
+
+- Fixes spinner command output for command chains (`P && Q`).
+
 ## v0.6.0
 
 - Adds spinner functionality to `exec` and `Process.exec` via the `with_spinner` parameter.
