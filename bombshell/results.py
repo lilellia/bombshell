@@ -70,6 +70,20 @@ class CompletedProcess(Generic[S]):
         """Return True if any of the processes in the pipeline timed out."""
         return self._timed_out
 
+    def ok(self, *, strict: bool = False) -> bool:
+        """Return whether the process exited successfully.
+
+        :arg strict:
+            If True, return False if any process exited with a non-zero exit code.
+            If False, return False if the last process exited with a non-zero exit code.
+
+        :return: whether all (strict=False) or the last (strict=False) process exited with a zero exit code
+        """
+        if strict:
+            return all(ec == 0 for ec in self.exit_codes)
+
+        return self.exit_code == 0
+
     def check(self, *, strict: bool = False) -> None:
         """Raise a PipelineError if the pipeline exited with a non-zero exit code.
 
@@ -80,10 +94,7 @@ class CompletedProcess(Generic[S]):
         :return: None
         :raise PipelineError: If any (strict=True) or the last (strict=False) process exited with a non-zero exit code.
         """
-        if strict and any(ec != 0 for ec in self.exit_codes):
-            raise PipelineError(self)
-
-        if not strict and self.exit_code != 0:
+        if not self.ok(strict=strict):
             raise PipelineError(self)
 
     def exit(self) -> None:

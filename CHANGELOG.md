@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.7.0
+
+- Adds `CompletedProcess.ok` as a return-boolean version of `.check`.
+
 ## v0.6.1
 
 - Fixes spinner command output for command chains (`P && Q`).

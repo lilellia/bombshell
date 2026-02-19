@@ -45,7 +45,7 @@ def exec(
     cwd: str | PathLike[str] | None = None,
     capture: bool = True,
     mode: type[bytes] = bytes,
-    merge_stderr: bool = True,
+    merge_stderr: bool = False,
     timeout: float | None = None,
     with_spinner: bool = False,
 ) -> CompletedProcess[bytes]: ...
@@ -58,7 +58,7 @@ def exec(
     cwd: str | PathLike[str] | None = None,
     capture: bool = True,
     mode: type[str] = str,
-    merge_stderr: bool = True,
+    merge_stderr: bool = False,
     timeout: float | None = None,
     with_spinner: bool = False,
 ) -> CompletedProcess[str]: ...
