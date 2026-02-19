@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from enum import Enum
 import os
 from os import PathLike
@@ -19,6 +20,7 @@ else:
 
 from .resources import ResourceData
 from .results import CompletedProcess
+from .spin import spin
 from .stream import consume_stream, feed_stream, make_buffer
 from .wait import wait
 
@@ -45,6 +47,7 @@ def exec(
     mode: type[bytes] = bytes,
     merge_stderr: bool = True,
     timeout: float | None = None,
+    with_spinner: bool = False,
 ) -> CompletedProcess[bytes]: ...
 
 
@@ -57,6 +60,7 @@ def exec(
     mode: type[str] = str,
     merge_stderr: bool = True,
     timeout: float | None = None,
+    with_spinner: bool = False,
 ) -> CompletedProcess[str]: ...
 
 
@@ -68,9 +72,12 @@ def exec(
     mode: type[S] = str,  # type: ignore
     merge_stderr: bool = False,
     timeout: float | None = None,
+    with_spinner: bool = False,
 ) -> CompletedProcess[S]:
     """Execute the given command and return the result as a CompletedProcess object."""
-    return Process(*args, env=env, cwd=cwd).exec(capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
+    return Process(*args, env=env, cwd=cwd).exec(
+        capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout, with_spinner=with_spinner
+    )
 
 
 class Process:
@@ -164,6 +171,7 @@ class Process:
         mode: type[str] = str,
         merge_stderr: bool = False,
         timeout: float | None = None,
+        with_spinner: bool = False,
     ) -> CompletedProcess[str]: ...
 
     @overload
@@ -175,6 +183,7 @@ class Process:
         mode: type[bytes] = bytes,
         merge_stderr: bool = False,
         timeout: float | None = None,
+        with_spinner: bool = False,
     ) -> CompletedProcess[bytes]: ...
 
     def exec(
@@ -185,6 +194,7 @@ class Process:
         mode: type[S] = str,  # type: ignore[assignment]
         merge_stderr: bool = False,
         timeout: float | None = None,
+        with_spinner: bool = False,
     ) -> CompletedProcess[S]:
         match self._relation:
             case CommandRelation.NONE | CommandRelation.PIPE:
@@ -195,10 +205,22 @@ class Process:
                     text=(mode is str),
                 )
 
-                return self._exec_pipeline(procs, stdin=stdin, capture=capture, mode=mode, timeout=timeout)
+                with spin(message=str(self)) if with_spinner else nullcontext() as spin_state:
+                    res = self._exec_pipeline(procs, stdin=stdin, capture=capture, mode=mode, timeout=timeout)
+
+                    if spin_state:
+                        spin_state.exit_code = res.exit_code
+                    return res
 
             case CommandRelation.CHAIN:
-                return self._exec_chain(stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
+                return self._exec_chain(
+                    stdin,
+                    capture=capture,
+                    mode=mode,
+                    merge_stderr=merge_stderr,
+                    timeout=timeout,
+                    with_spinner=with_spinner,
+                )
 
             case _:
                 raise ValueError(f"invalid relation: {self._relation}")
@@ -313,11 +335,16 @@ class Process:
         mode: type[S],
         merge_stderr: bool,
         timeout: float | None,
+        with_spinner: bool,
     ) -> CompletedProcess[S]:
         assert self._children is not None
         left, right = self._children
 
-        res1 = left.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
+        with spin(message=str(self)) if with_spinner else nullcontext() as spin_state:
+            res1 = left.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
+
+            if spin_state:
+                spin_state.exit_code = res1.exit_code
 
         if res1.exit_code:
             return res1
@@ -327,7 +354,12 @@ class Process:
         else:
             remaining = max(0, timeout - res1.runtime)
 
-        res2 = right.exec(stdin=None, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=remaining)
+        with spin(message=str(right)) if with_spinner else nullcontext() as spin_state:
+            res2 = right.exec(stdin=None, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=remaining)
+
+            if spin_state:
+                spin_state.exit_code = res2.exit_code
+
         return res1 + res2
 
     __call__ = exec

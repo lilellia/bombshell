@@ -117,7 +117,13 @@ print(res.exit_code)   # 1
 print(res.exit_codes)  # (0, 0, 1)  <-- indicating that the first two echo commands exited with 0, then false exited with 1
 ```
 
-For convenience, a top-level `exec` function is also provided as a wrapper around `Process(...).exec(...)`. In general, `Process(...).exec(...)` should be preferred for clarity. The top-level `exec` function does not support pipes and still requires the arguments to be provided as variadic arguments, rather than as a string.
+`Process.exec` also supports a `with_spinner` argument, useful for long-running commands:
+
+![a gif showing running the simple-spinner example](examples/simple-spinner.gif)
+
+The spinner is written to stderr. When `with_spinner` is set to True, it is inadvisable to set `capture=False` as this will clobber the output.
+
+In addition, for convenience, a top-level `exec` function is also provided as a wrapper around `Process(...).exec(...)`. In general, `Process(...).exec(...)` should be preferred for clarity. The top-level `exec` function does not support pipes and still requires the arguments to be provided as variadic arguments, rather than as a string.
 
 ## Installation
 
@@ -285,7 +291,7 @@ False
 
 ### `exec`
 
-A top-level function that wraps `Process(...).exec(...)`. The signature is `def exec(*args: str, **kwargs) -> CompletedProcess[S]`. The available kwargs are all of the keyword arguments to `Process.__init__` (`cwd` and `env`) and `.exec` (`stdin`, `capture`, `mode`, `merge_stderr`, `timeout`).
+A top-level function that wraps `Process(...).exec(...)`. The signature is `def exec(*args: str, **kwargs) -> CompletedProcess[S]`. The available kwargs are all of the keyword arguments to `Process.__init__` (`cwd` and `env`) and `.exec` (`stdin`, `capture`, `mode`, `merge_stderr`, `timeout`, `with_spinner`).
 
 `*args` must still be given as variadic arguments: `exec` does not support single-string commands (à la `shell=True`). Thus, the following are equivalent:
 
@@ -300,7 +306,7 @@ In general, the top one (`Process(...).exec(...)`) should be preferred for clari
 
 A `Process` object takes a command to run as arguments, along with (optionally) an `env` mapping to use for it and a `cwd` parameter. The object defines:
 
-- `exec(self, stdin: S | None = None, *, capture: bool = True, mode: type[S] = str, merge_stderr: bool = False, timeout: float | None = None) -> CompletedProcess[S]`: Run the given command. `S` is either `str` or `bytes` (but must match in all cases). `stdin` is a str/bytes value (not a pipe/file) to pass as stdin to this command. `capture=True` (default) means that stdout and stderr will be captured in the resulting CompletedProcess object. `mode` determines whether the output is of type `str` or `bytes`. If `merge_stderr` is True, then stderr is redirected to stdout (meaning that `exec().stdout` will contain both streams and `.stderr` will be empty). `timeout`, if provided, is the maximum number of seconds to allow the command to run.
+- `exec(self, stdin: S | None = None, *, capture: bool = True, mode: type[S] = str, merge_stderr: bool = False, timeout: float | None = None, with_spinner: bool = False) -> CompletedProcess[S]`: Run the given command. `S` is either `str` or `bytes` (but must match in all cases). `stdin` is a str/bytes value (not a pipe/file) to pass as stdin to this command. `capture=True` (default) means that stdout and stderr will be captured in the resulting CompletedProcess object. `mode` determines whether the output is of type `str` or `bytes`. If `merge_stderr` is True, then stderr is redirected to stdout (meaning that `exec().stdout` will contain both streams and `.stderr` will be empty). `timeout`, if provided, is the maximum number of seconds to allow the command to run. `with_spinner=True` will display a terminal spinner (with the dots pattern) in the following format `[  X] H:MM:SS.F Running COMMAND...`, where `X` is the looping character, `H:MM:SS.F` is the running duration of the command, and `COMMAND` is the string representation of the command being run; once the command has finished, the brackets will contain the exit code of the process, for example `[000] 0:00:03.0 sleep 3`.
 
 - `__call__(...)`: an alias for `.exec(...)`.
 

@@ -48,7 +48,8 @@ def _wait_fallback(process: subprocess.Popen[Any], timeout: float | None) -> Wai
         timed_out = True
     finally:
         rtime = time.perf_counter() - start
-        return WaitResult(exit_code, ResourceData(rtime), timed_out=timed_out)
+
+    return WaitResult(exit_code, ResourceData(rtime), timed_out=timed_out)
 
 
 def wait(process: subprocess.Popen[Any], timeout: float | None) -> WaitResult:

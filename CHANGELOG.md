@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6.0
+
+- Adds spinner functionality to `exec` and `Process.exec` via the `with_spinner` parameter.
+- Fixes `SyntaxWarning` caused in the internal wait4 fallback function.
+
 ## v0.5.1
 
 - Changes `CompletedProcess.exit_codes` to `tuple` instead of `list`.
