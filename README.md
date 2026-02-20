@@ -121,7 +121,7 @@ Similarly, `Process.then` provides `command1 ; command2` functionality, and `Pro
 
 `Process.exec` also supports a `with_spinner` argument, useful for long-running commands:
 
-![a gif showing running the simple-spinner example](examples/simple-spinner.gif)
+![a gif showing running the simple-with-spinner example](examples/simple-with-spinner.gif)
 
 The spinner is written to stderr. When `with_spinner` is set to True, it is inadvisable to set `capture=False` as this will clobber the output.
 
@@ -323,3 +323,30 @@ A `Process` object takes a command to run as arguments, along with (optionally) 
 - `and_then(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None) -> Self`: return a Process object that represents `command1 && command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).and_then("echo", 2)`, equivalent to `echo 1 && echo 2`), or it can be a single Process object (such as `Process("echo", 1).and_then(Process("echo", 2))`.) The parameters `env` and `cwd` are ignored when `args` is a single `Process` object.
 
 - `__or__(self, other: Self) -> Self`: an alias for `.pipe`, but requires that the other object is a `Process` object.
+
+## `spin`
+
+A context manager that handles a terminal spinner. It takes the following arguments:
+
+- `message: str`: the initial message to display
+- `chars: Sequence[str] = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"`: the sequence of characters to use (defaults to the dots spinner)
+- `delay: float = 0.1`: the amount of time between each update
+- `stream: IO[str] = sys.stderr`: where the spinner will be written
+- `template: str = "[  {char}] {duration} {message}"`: the template for the display line while the spinner is running. The available fields are `char` (the active character in the spinner loop), `duration` (the elapsed time, as formatted as `H:MM:SS.FF`), and `message` (the current message, which can be updated partway by setting `spinner.message`)
+- `complete_template: str = "[{status:>3}] {duration} {message}"`: the template for the display line after the spinner finishes. The available fields are `status` (the final status of the spinner, set by `spinner.status` (or by `spinner.ok()` or `spinner.fail()`)), as well as `duration` and `message`, which function the same as in `template`.
+
+```py
+with spin("Processing...") as spinner:
+    for i in range(100):
+        spinner.message = f"Processing... ({i}/500)"
+        
+        is_error = random.uniform(0, 1) < 0.05
+        if is_error:
+            spinner.message = f"Processing failed on iteration {i}"
+            spinner.fail()
+            break
+
+    # spinner.ok() is implicit
+```
+
+![a gif showing running the simple-spinner example](examples/simple-spinner.gif)

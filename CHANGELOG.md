@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.1
+
+- Adds more general functionality to the `spin` function and promotes it to being a top-level function.
+  - Renames `SpinState` to `Spinner`
+  - Adds `Spinner.message` field, which allows for changing the message throughout the spinner.
+  - Changes `Spinner.exit_code: int` to `Spinner.status: str`, which allows for a more general API.
+  - Adds `Spinner.ok()` (sets `status = "✓"`) and `Spinner.fail()` (sets `status = "✗"`),
+    as well as `Spinner.set_exit_code(exit_code: int)` (sets `status = str(exit_code).zfill(3)`) for internal use.
+  - Adds `template` and `complete_template` keywords to `spin`.
+
 ## v0.7.0
 
 - Renames `Process.pipe_into` to `.pipe`.

@@ -211,11 +211,11 @@ class Process:
                     text=(mode is str),
                 )
 
-                with spin(message=str(self)) if with_spinner else nullcontext() as spin_state:
+                with spin(message=str(self)) if with_spinner else nullcontext() as spinner:
                     res = self._exec_pipeline(procs, stdin=stdin, capture=capture, mode=mode, timeout=timeout)
 
-                    if spin_state:
-                        spin_state.exit_code = res.exit_code
+                    if spinner:
+                        spinner.set_exit_code(res.exit_code)
                     return res
 
             case _:
@@ -351,11 +351,11 @@ class Process:
         assert self._children is not None
         left, right = self._children
 
-        with spin(message=str(left)) if with_spinner else nullcontext() as spin_state:
+        with spin(message=str(left)) if with_spinner else nullcontext() as spinner:
             res1 = left.exec(stdin=stdin, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=timeout)
 
-            if spin_state:
-                spin_state.exit_code = res1.exit_code
+            if spinner:
+                spinner.set_exit_code(res1.exit_code)
 
         if not is_continuable(res1.exit_code):
             return res1
@@ -365,11 +365,11 @@ class Process:
         else:
             remaining = max(0, timeout - res1.runtime)
 
-        with spin(message=str(right)) if with_spinner else nullcontext() as spin_state:
+        with spin(message=str(right)) if with_spinner else nullcontext() as spinner:
             res2 = right.exec(stdin=None, capture=capture, mode=mode, merge_stderr=merge_stderr, timeout=remaining)
 
-            if spin_state:
-                spin_state.exit_code = res2.exit_code
+            if spinner:
+                spinner.set_exit_code(res2.exit_code)
 
         return res1 + res2
 

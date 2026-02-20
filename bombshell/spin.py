@@ -18,8 +18,18 @@ def format_duration(duration: float) -> str:
 
 
 @dataclass
-class SpinState:
-    exit_code: int = 0
+class Spinner:
+    message: str
+    status: str = "✓"
+
+    def ok(self) -> None:
+        self.status = "✓"
+
+    def fail(self) -> None:
+        self.status = "✗"
+
+    def set_exit_code(self, exit_code: int) -> None:
+        self.status = str(exit_code).zfill(3)
 
 
 @contextmanager
@@ -29,28 +39,51 @@ def spin(
     chars: Sequence[str] = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
     delay: float = 0.1,
     stream: IO[str] = sys.stderr,
-) -> Iterator[SpinState]:
+    template: str = "[  {char}] {duration} {message}",
+    complete_template: str = "[{status:>3}] {duration} {message}",
+) -> Iterator[Spinner]:
     """Run a terminal spinner.
 
-    with spin("Processing...") as state:
+    with spin("Processing...") as spinner:
         res = Process("echo", "1").exec()
-        state.exit_code = res.exit_code
+        spinner.status = str(res.exit_code).zfill(3)
+
+    :arg message: initial message to display
+    :arg chars: characters to cycle through
+    :arg delay: delay between each character
+    :arg stream: stream to write to
+    :arg template: template to use for the spinner while it's running
+        The available variables are `char` (the current character from `chars`),
+        `duration` (the formatted duration as H:MM:SS.f), and `message` (the message).
+        The message can be changed mid-run by setting `spinner.message = new_message`.
+    :arg complete_template: template to use when the spinner is complete. The available variables are
+        `status` (set by `spinner.status`), `duration` (the formatted duration as H:MM:SS.f), and `message`
+        (the message).
     """
     event = Event()
-    state = SpinState()
+    state = Spinner(message)
 
     def run() -> None:
         start = time.perf_counter()
         symbols = itertools.cycle(chars)
         while not event.is_set():
-            duration = format_duration(time.perf_counter() - start)
-            stream.write(f"\r[  {next(symbols)}] {duration} {message}{CLEAR_LINE}")
+            env = {
+                "char": next(symbols),
+                "duration": format_duration(time.perf_counter() - start),
+                "message": state.message,
+            }
+
+            stream.write(f"\r{template.format(**env)}{CLEAR_LINE}")
             stream.flush()
             event.wait(delay)
 
         # write final message
-        duration = format_duration(time.perf_counter() - start)
-        stream.write(f"\r[{state.exit_code:03}] {duration} {message}{CLEAR_LINE}\n")
+        env = {
+            "status": state.status,
+            "duration": format_duration(time.perf_counter() - start),
+            "message": state.message,
+        }
+        stream.write(f"\r{complete_template.format(**env)}{CLEAR_LINE}\n")
         stream.flush()
 
     try:

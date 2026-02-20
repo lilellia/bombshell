@@ -1,6 +1,19 @@
-from bombshell import Process
+import time
 
-url = "https://youtu.be/dQw4w9WgXcQ"
-dest = "/tmp/never-gonna-give-you-up.%(ext)s"
+from bombshell import spin
 
-Process("yt-dlp", url, "-o", dest).exec(with_spinner=True)
+with spin("Processing..."):
+    time.sleep(2)
+
+with spin("Processing...") as spinner:
+    for i in range(20):
+        spinner.message = f"Processing... ({i}/20)"
+
+        if i == 10:  # simulate error
+            spinner.message = f"Processing failed on iteration {i}"
+            spinner.fail()
+            break
+
+        time.sleep(0.25)
+
+    # spinner.ok() is implicit
