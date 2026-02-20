@@ -189,13 +189,13 @@ def test_5mb_stdin_without_deadlock() -> None:
 
 
 def test_5mb_stdin_piped_without_deadlock() -> None:
-    res = Script.cat().pipe_into(Script.grep("hello")).exec("hello\n" * 2**20)
+    res = Script.cat().pipe(Script.grep("hello")).exec("hello\n" * 2**20)
     assert res.stdout == "hello\n" * 2**20
     assert res.exit_code == 0
 
 
 def test_bytes_mode() -> None:
-    res = Script.echo("hello").pipe_into(Script.cat()).exec(mode=bytes)
+    res = Script.echo("hello").pipe(Script.cat()).exec(mode=bytes)
     assert res.stdout in (b"hello\n", b"hello\r\n")
     assert res.exit_code == 0
 

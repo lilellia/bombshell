@@ -62,7 +62,7 @@ print(stdout)  # "hello\nworld"
 There must be a better way.
 
 ```py
-res = Process("echo", "hello\nworld\ngoodbye").pipe_into("grep", "l").exec()
+res = Process("echo", "hello\nworld\ngoodbye").pipe("grep", "l").exec()
 print(res.stdout)  # "hello\nworld"
 
 # Process supports .__or__, so we can also do
@@ -116,6 +116,8 @@ print(res.stdout)      # "1\n2\n"
 print(res.exit_code)   # 1
 print(res.exit_codes)  # (0, 0, 1)  <-- indicating that the first two echo commands exited with 0, then false exited with 1
 ```
+
+Similarly, `Process.then` provides `command1 ; command2` functionality, and `Process.or_else` provides `command1 || command2`.
 
 `Process.exec` also supports a `with_spinner` argument, useful for long-running commands:
 
@@ -192,7 +194,7 @@ An object that stores the state of a completed process. In particular, its attri
 | `command`     | `str`                         | a string representation of the command as would be run on the command line (formatted for POSIX)                                                                          |
 | `exit_codes`  | `tuple[int, ...]`             | all of the exit codes for the various processes in the pipeline                                                                                                           |
 | `exit_code`   | `int`                         | the exit code of the last executed part of the pipeline (and thus the exit code of the pipeline)                                                                          |
-| `stdout`      | `S` (str or bytes)            | the contents of the stdout pipes, if captured. `p1.pipe_into(p2).exec().stdout` will contain only the output of `p2`; `p1.and_then(p2).exec().stdout` will contain both. |
+| `stdout`      | `S` (str or bytes)            | the contents of the stdout pipes, if captured. `p1.pipe(p2).exec().stdout` will contain only the output of `p2`; for `p1.then(p2)`, it will contain both; for `p1.or_else(p2)` and `p1.and_then(p2)`, it will include both unless `p2` is not run. |
 | `stderr`      | `S` (str or bytes)            | the contents of the stderr pipes, if captured. This will always include the combination of all stderr pipes.                                                              |
 | `runtime`     | `float`                       | the real (wall) time of the command's execution (seconds) |
 | `resources`   | `tuple[ResourceData, ...]`    | a tuple of objects describing the resource usage (real time, user time, system time, memory usage) of each process |
@@ -201,9 +203,9 @@ An object that stores the state of a completed process. In particular, its attri
 ```py
 res = (
     Process("echo", 1)
-    .pipe_into("echo", 2)
-    .pipe_into("false")
-    .pipe_into("echo", 3)
+    .pipe("echo", 2)
+    .pipe("false")
+    .pipe("echo", 3)
     .exec()
 )
 
@@ -232,9 +234,9 @@ This class also defines the following methods:
 ```py
 res = (
     Process("echo", 1)
-    .pipe_into("echo", 2)
-    .pipe_into("false")
-    .pipe_into("echo", 3)
+    .pipe("echo", 2)
+    .pipe("false")
+    .pipe("echo", 3)
     .exec()
 )
 
@@ -314,8 +316,10 @@ A `Process` object takes a command to run as arguments, along with (optionally) 
 
 - `with_cwd(self, cwd: str | PathLike[str] | None) -> Self`: return a new Process object with the updated working directory.
 
-- `pipe_into(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None) -> Self`: return a new Process object that represents `command1 | command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).pipe_into("echo", 2)`, equivalent to `echo 1 | echo 2`), or it can be a single `Process` object (such as `Process("echo", 1).pipe_into(Process("echo", 2))`.) The parameters `env` and `cwd` are ignored when `args` is a single `Process` object.
+- `pipe(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None) -> Self`: return a new Process object that represents `command1 | command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).pipe("echo", 2)`, equivalent to `echo 1 | echo 2`), or it can be a single `Process` object (such as `Process("echo", 1).pipe(Process("echo", 2))`.) The parameters `env` and `cwd` are ignored when `args` is a single `Process` object.
 
-- `and_then(self, *args: Any) -> Self`: return a Process object that represents `command1 && command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).and_then("echo", 2)`, equivalent to `echo 1 && echo 2`), or it can be a single Process/Pipeline/CommandChain object (such as `Process("echo", 1).and_then(Process("echo", 2))`.) The parameters `env` and `cwd` are ignored when `args` is a single `Process` object.
+- `then(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None) -> Self`: return a Process object that represents `command1 ; command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).then("echo", 2)`, equivalent to `echo 1 ; echo 2`), or it can be a single Process object (such as `Process("echo", 1).then(Process("echo", 2))`.) The parameters `env` and `cwd` are ignored when `args` is a single `Process` object.
 
-- `__or__(self, other: Self) -> Self`: an alias for `.pipe_into`, but requires that the other object is a `Process` object.
+- `and_then(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None) -> Self`: return a Process object that represents `command1 && command2`. The given `args` can be either a series of values to use as a command (such as `Process("echo", 1).and_then("echo", 2)`, equivalent to `echo 1 && echo 2`), or it can be a single Process object (such as `Process("echo", 1).and_then(Process("echo", 2))`.) The parameters `env` and `cwd` are ignored when `args` is a single `Process` object.
+
+- `__or__(self, other: Self) -> Self`: an alias for `.pipe`, but requires that the other object is a `Process` object.

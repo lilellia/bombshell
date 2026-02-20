@@ -118,24 +118,22 @@ class Process:
             case []:
                 raise ValueError("function requires at least one argument")
             case [obj] if isinstance(obj, (Process, type(self))):
-                # Command("echo", 1).pipe_into(Command("echo", 2))
+                # Command("echo", 1).pipe(Command("echo", 2))
                 other = obj
             case _:
-                # Command("echo", 1).pipe_into("echo", 2)
+                # Command("echo", 1).pipe("echo", 2)
                 other = type(self)(*args, env=env, cwd=cwd)
 
         return type(self)(_relation=relation, _children=(self, other))
 
-    def pipe_into(
-        self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
-    ) -> Self:
+    def pipe(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None) -> Self:
         return self._bridge(*args, env=env, cwd=cwd, relation=CommandRelation.PIPE)
 
     def __or__(self, other: Self) -> Self:
         if not isinstance(other, type(self)):
             return NotImplemented
 
-        return self.pipe_into(other)
+        return self.pipe(other)
 
     def then(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None) -> Self:
         return self._bridge(*args, env=env, cwd=cwd, relation=CommandRelation.THEN)
