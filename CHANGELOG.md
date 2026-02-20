@@ -3,6 +3,7 @@
 ## v0.7.0
 
 - Adds `Process.then` as an analogue of shell `P ; Q`.
+- Adds `Process.or_else` as an analogue of shell `P || Q`.
 - Adds `CompletedProcess.ok` as a return-boolean version of `.check`.
 
 ## v0.6.1

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from enum import Enum
 import os
@@ -31,7 +31,8 @@ class CommandRelation(Enum):
     NONE = ""
     PIPE = "|"
     THEN = ";"
-    CHAIN = "&&"
+    AND = "&&"
+    OR = "||"
 
 
 class _ActiveProcess(NamedTuple):
@@ -142,7 +143,10 @@ class Process:
     def and_then(
         self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None
     ) -> Self:
-        return self._bridge(*args, env=env, cwd=cwd, relation=CommandRelation.CHAIN)
+        return self._bridge(*args, env=env, cwd=cwd, relation=CommandRelation.AND)
+
+    def or_else(self, *args: Any, env: Mapping[str, str] | None = None, cwd: str | PathLike[str] | None = None) -> Self:
+        return self._bridge(*args, env=env, cwd=cwd, relation=CommandRelation.OR)
 
     def with_cwd(self, cwd: str | PathLike[str] | None) -> Self:
         if self._children:
@@ -216,8 +220,13 @@ class Process:
                         spin_state.exit_code = res.exit_code
                     return res
 
-            case CommandRelation.THEN | CommandRelation.CHAIN:
-                check = self._relation == CommandRelation.CHAIN
+            case _:
+                is_continuable_lookup = {
+                    CommandRelation.THEN: lambda exit_code: True,
+                    CommandRelation.AND: lambda exit_code: exit_code == 0,
+                    CommandRelation.OR: lambda exit_code: exit_code != 0,
+                }
+
                 return self._exec_chain(
                     stdin,
                     capture=capture,
@@ -225,11 +234,8 @@ class Process:
                     merge_stderr=merge_stderr,
                     timeout=timeout,
                     with_spinner=with_spinner,
-                    check=check,
+                    is_continuable=is_continuable_lookup[self._relation],
                 )
-
-            case _:
-                raise ValueError(f"invalid relation: {self._relation}")
 
     def _launch(
         self, stdin_fd: int | None, stdout_fd: int | None, stderr_fd: int | None, text: bool
@@ -260,7 +266,7 @@ class Process:
 
                 return p1 + p2
 
-            case CommandRelation.THEN | CommandRelation.CHAIN:
+            case _:
                 raise NotImplementedError
 
     def _exec_pipeline(
@@ -342,7 +348,7 @@ class Process:
         merge_stderr: bool,
         timeout: float | None,
         with_spinner: bool,
-        check: bool,
+        is_continuable: Callable[[int], bool],
     ) -> CompletedProcess[S]:
         assert self._children is not None
         left, right = self._children
@@ -353,7 +359,7 @@ class Process:
             if spin_state:
                 spin_state.exit_code = res1.exit_code
 
-        if check and res1.exit_code:
+        if not is_continuable(res1.exit_code):
             return res1
 
         if timeout is None:
@@ -376,10 +382,7 @@ class Process:
             case CommandRelation.NONE:
                 return shlex.join(self._args)
 
-            case CommandRelation.PIPE | CommandRelation.CHAIN | CommandRelation.THEN:
+            case _:
                 assert self._children is not None
                 left, right = self._children
                 return f"{left} {self._relation.value} {right}"
-
-            case _:
-                raise ValueError(f"invalid relation: {self._relation}")
