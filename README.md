@@ -333,9 +333,14 @@ A context manager that handles a terminal spinner. It takes the following argume
 - `delay: float = 0.1`: the amount of time between each update
 - `stream: IO[str] = sys.stderr`: where the spinner will be written
 - `template: str = "[  {char}] {duration} {message}"`: the template for the display line while the spinner is running. The available fields are `char` (the active character in the spinner loop), `duration` (the elapsed time, as formatted as `H:MM:SS.FF`), and `message` (the current message, which can be updated partway by setting `spinner.message`)
-- `complete_template: str = "[{status:>3}] {duration} {message}"`: the template for the display line after the spinner finishes. The available fields are `status` (the final status of the spinner, set by `spinner.status` (or by `spinner.ok()` or `spinner.fail()`)), as well as `duration` and `message`, which function the same as in `template`.
+- `complete_template: str = "[{status:>3}] {duration} {message}"`: the template for the display line after the spinner finishes. The available fields are `status` (the final status of the spinner, set by `spinner.status` (or by `spinner.ok()`, `spinner.fail()`, or `spinner.warn()`)), as well as `duration` and `message`, which function the same as in `template`.
+
+The default status is `"✓"`, so you do not need to manually run `spinner.ok()` at the end of the block except to reset the status if you changed it.
 
 ```py
+with spin("Processing..."):
+    time.sleep(2)
+
 with spin("Processing...") as spinner:
     for i in range(100):
         spinner.message = f"Processing... ({i}/500)"
@@ -346,7 +351,7 @@ with spin("Processing...") as spinner:
             spinner.fail()
             break
 
-    # spinner.ok() is implicit
+    # spinner.ok() is the default
 ```
 
 ![a gif showing running the simple-spinner example](examples/simple-spinner.gif)

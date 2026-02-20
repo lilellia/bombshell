@@ -16,4 +16,4 @@ with spin("Processing...") as spinner:
 
         time.sleep(0.25)
 
-    # spinner.ok() is implicit
+    # spinner.ok() is the default

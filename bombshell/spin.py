@@ -25,6 +25,9 @@ class Spinner:
     def ok(self) -> None:
         self.status = "✓"
 
+    def warn(self) -> None:
+        self.status = "!"
+
     def fail(self) -> None:
         self.status = "✗"
 
