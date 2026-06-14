@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bombshell"
-version = "0.7.2"
+version = "0.8.0"
 description = "A library for easily running shell commands, whether standalone or piped."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.0
+
+- Improves the internal process wait process by leveraging low-level native process wait mechanisms to bypass the need for the busy-wait `os.wait4` handle. This also grants rusage data on Windows by hooking its native reaping:
+  - Linux >=5.3: `pidfd_open` + `wait4`
+  - macOS/BSD: `kqueue` + `wait4`
+  - Windows: `WaitForSingleObject` + `GetProcessTimes` + `GetProcessMemoryInfo`
+  - fallbacks to the pre-existing busy-wait wait4 loop where available (POSIX) and blind `Popen.wait` where not
+
 ## v0.7.1
 
 - Adds more general functionality to the `spin` function and promotes it to being a top-level function.

@@ -166,7 +166,7 @@ A NamedTuple with the following attributes:
 - `max_resident_set_size` (alias: `maxrss`): the maximum resident set size used by the process (bytes)
 
 > [!NOTE]
-> `real_time` (`rtime`) is guaranteed to exist. **On non-Unix systems, the other values will be None as they are not reported by the operating system.** On Unix, they may be None in rare situations where the process is not reaped normally.
+> `real_time` (`rtime`) is guaranteed to exist. The other values are likely to be available as well but are degraded to `None` values if there is an issue waiting on/reaping the process. This reaping is handled differently on different platforms (via `pidfd_open` + `wait4` on Linux, via `kqueue` + `wait4` on macOS/BSD, and via `WaitForSingleProcess` + `GetProcessTimes/GetProcessMemoryInfo` on Windows), so edge-case lack of availability may differ.
 
 Further note that **`max_resident_set_size` is given in bytes on all platforms**. On Linux, this value is natively reported in KiB, but it's converted here for compatibility. Due to the overhead of launching these processes from within Python, in most cases, the reported value will be higher than what /usr/bin/time reports:
 
